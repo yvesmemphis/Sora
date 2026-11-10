@@ -12,6 +12,8 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
+ORDER_MENU_PRICING_SERVICE = env("ORDER_MENU_PRICING_SERVICE", default="")
+ORDER_TAX_RATE = env("ORDER_TAX_RATE", default="0")
 
 INSTALLED_APPS = [
     "daphne",
