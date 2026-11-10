@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+/*
+ * Charte Maison Sora (maquettes MVP v1.2).
+ * Toutes les couleurs de l'interface passent par ces jetons :
+ * utiliser `bg-vert`, `text-terracotta`, `border-ligne`… plutôt que des valeurs en dur.
+ */
+@theme {
+  /* Couleurs de marque */
+  --color-vert: #1f3d36; /* Vert profond : titres, actions principales staff */
+  --color-terracotta: #a3481f; /* Action principale côté client */
+  --color-creme: #f6f0e6; /* Fond d'application */
+  --color-or: #c99a3b; /* Accents, surtitres sur fond vert */
+  --color-encre: #22201c; /* Texte principal */
+  --color-nuit: #14231f; /* Fond de l'écran cuisine */
+
+  /* Surfaces */
+  --color-papier: #fffdf9; /* Cartes et champs */
+  --color-sable: #f1eadd; /* Notes, puces neutres */
+  --color-sable-2: #e9e3d6; /* Encadrés d'information */
+  --color-entete: #f3efe6; /* Ligne sélectionnée */
+  --color-entete-table: #f3ede2; /* En-tête de tableau */
+  --color-segment: #ece5d8; /* Fond des sélecteurs segmentés */
+  --color-toile: #e7dfd2; /* Fond derrière les écrans de démonstration */
+  --color-nuit-carte: #1c3029; /* Carte de commande en cuisine */
+
+  /* Lignes et bordures */
+  --color-ligne: #e9e2d5;
+  --color-ligne-2: #e3dccf;
+  --color-ligne-3: #efe9de;
+  --color-bordure: #ddd5c7;
+  --color-bordure-2: #d9d1c2;
+
+  /* Textes secondaires */
+  --color-texte-2: #3d3932;
+  --color-texte-3: #4f4a42;
+  --color-texte-4: #8c857a;
+
+  /* Statuts (texte / fond) */
+  --color-ok: #2f6b3a;
+  --color-ok-fond: #daddce;
+  --color-attention: #7a5200;
+  --color-attention-fond: #e8d4af;
+  --color-attention-fond-2: #f1e3c6;
+  --color-danger: #b3261e;
+  --color-danger-fond: #efdcd2;
+  --color-neutre-fond: #e1dbd2;
+  --color-confirme-fond: #d8d7cd;
+  --color-servi-fond: #e3e6de;
+  --color-terracotta-fond: #f1e2d9;
+  --color-en-ligne: #9fd0a6;
+
+  /* Typographie : variables injectées par next/font dans layout.tsx */
+  --font-sans: var(--font-dm-sans), system-ui, sans-serif;
+  --font-serif: var(--font-fraunces), Georgia, serif;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background: var(--color-creme);
+    color: var(--color-encre);
+    font-family: var(--font-sans);
+  }
+
+  /* Chiffres alignés partout où l'on affiche des montants ou des heures */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-or);
+    outline-offset: 2px;
+  }
+}
+
+@utility photo-placeholder {
+  background: repeating-linear-gradient(135deg, #ede3d2 0 6px, #e6dac6 6px 12px);
+}
+
+@utility photo-placeholder-vert {
+  background: repeating-linear-gradient(135deg, #2a4a42 0 7px, #25443c 7px 14px);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  /* Ticket de secours 80 mm : seule la zone marquée est imprimée */
+  body:has(.zone-impression) * {
+    visibility: hidden;
+  }
+  .zone-impression,
+  .zone-impression * {
+    visibility: visible;
+  }
+  .zone-impression {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 80mm;
+    box-shadow: none !important;
+  }
+}
