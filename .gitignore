@@ -1,0 +1,7 @@
+.env
+.venv/
+media/
+media_test/
+__pycache__/
+*.py[cod]
+.pytest_cache/
