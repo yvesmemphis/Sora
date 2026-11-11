@@ -95,6 +95,24 @@ export function TableauCuisine() {
             {son ? "Son activé" : "Son coupé"}
           </button>
           <span className="tabular text-[32px] font-bold">{heure}</span>
+          <span className="flex items-center gap-3 border-l border-creme/15 pl-6">
+            <span className="flex size-10 items-center justify-center rounded-full bg-creme text-sm font-bold text-nuit">
+              {utilisateur.initiales}
+            </span>
+            <span className="hidden flex-col leading-tight lg:flex">
+              <span className="text-base font-bold">{utilisateur.nom}</span>
+              <span className="text-sm opacity-70">{utilisateur.role}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void utilisateur.seDeconnecter()}
+              aria-label="Se déconnecter"
+              title="Se déconnecter"
+              className="flex size-12 cursor-pointer items-center justify-center rounded-xl border-[1.5px] border-creme/30 text-creme hover:bg-creme/10"
+            >
+              <Icon name="logout" className="size-6" />
+            </button>
+          </span>
         </div>
       </header>
 
