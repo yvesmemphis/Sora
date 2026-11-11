@@ -2,14 +2,18 @@
 
 /**
  * Panier du client (sans compte), conservé dans le navigateur.
- * Les commandes passées sont aussi gardées localement pour l'écran de suivi
- * tant que l'API `orders` du backend n'est pas branchée.
+ * La commande est envoyée à `POST /public/orders/` ; le jeton de suivi signé
+ * renvoyé par le backend sert d'identifiant à l'écran de suivi.
+ * Le suivi public ne renvoie ni prix ni emplacement : un récapitulatif est
+ * donc gardé localement, indexé par le jeton.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { PLATS } from "../demo/menu";
-import type { Commande, ModePaiement, ModeService, Plat } from "../types";
-import { COULEUR_HISTORIQUE } from "../statuts";
-import { formatHeure } from "../format";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cleIdempotence } from "../api/client";
+import { passerCommandePublique } from "../api/commandes";
+import { montant, referenceSaisie, TYPE_EMPLACEMENT } from "../api/conversions";
+import { MODES_PAIEMENT } from "../statuts";
+import type { LigneCommande, ModePaiement, ModeService, Plat } from "../types";
+import { useMenu } from "./menu";
 
 export interface LignePanier {
   platId: string;
@@ -22,8 +26,15 @@ export interface LignePanierDetaillee extends LignePanier {
   sousTotal: number;
 }
 
-/** Commande enregistrée localement, avec son horodatage réel. */
-export interface CommandeLocale extends Commande {
+/** Récapitulatif local d'une commande passée depuis ce navigateur. */
+export interface CommandeLocale {
+  jeton: string;
+  numero: string;
+  mode: ModeService;
+  emplacement: string;
+  paiement: ModePaiement;
+  total: number;
+  lignes: LigneCommande[];
   creeeLe: number; // timestamp ms
 }
 
@@ -35,7 +46,7 @@ interface PanierContexte {
   ajouter: (platId: string, quantite?: number, note?: string) => void;
   modifierQuantite: (platId: string, quantite: number) => void;
   vider: () => void;
-  passerCommande: (choix: { mode: ModeService; emplacement: string; paiement: ModePaiement }) => CommandeLocale;
+  passerCommande: (choix: { mode: ModeService; emplacement: string; paiement: ModePaiement }) => Promise<CommandeLocale>;
 }
 
 const CLE_PANIER = "sora.panier";
@@ -60,18 +71,21 @@ function ecrire(cle: string, valeur: unknown) {
   }
 }
 
-export function lireCommandeLocale(numero: string): CommandeLocale | undefined {
-  return lire<CommandeLocale[]>(CLE_COMMANDES, []).find((c) => c.numero === numero);
+export function lireCommandeLocale(jeton: string): CommandeLocale | undefined {
+  return lire<CommandeLocale[]>(CLE_COMMANDES, []).find((c) => c.jeton === jeton);
 }
 
-export function enregistrerCommandeLocale(commande: CommandeLocale) {
-  const toutes = lire<CommandeLocale[]>(CLE_COMMANDES, []).filter((c) => c.numero !== commande.numero);
+function enregistrerCommandeLocale(commande: CommandeLocale) {
+  const toutes = lire<CommandeLocale[]>(CLE_COMMANDES, []).filter((c) => c.jeton && c.jeton !== commande.jeton);
   ecrire(CLE_COMMANDES, [commande, ...toutes].slice(0, 20));
 }
 
 export function PanierProvider({ children }: { children: ReactNode }) {
+  const { menu } = useMenu();
   const [brut, setBrut] = useState<LignePanier[]>([]);
   const [pret, setPret] = useState(false);
+  // Une clé par panier : un double envoi (réseau lent) ne crée pas deux commandes.
+  const cle = useRef<string | null>(null);
 
   // Lecture différée : le stockage local n'existe pas pendant le rendu serveur.
   useEffect(() => {
@@ -82,15 +96,16 @@ export function PanierProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (pret) ecrire(CLE_PANIER, brut);
+    cle.current = null;
   }, [brut, pret]);
 
   const lignes = useMemo<LignePanierDetaillee[]>(
     () =>
       brut.flatMap((l) => {
-        const plat = PLATS.find((p) => p.id === l.platId);
+        const plat = menu?.plats.find((p) => p.id === l.platId);
         return plat ? [{ ...l, plat, sousTotal: plat.prix * l.quantite }] : [];
       }),
-    [brut],
+    [brut, menu],
   );
 
   const ajouter = useCallback((platId: string, quantite = 1, note?: string) => {
@@ -98,7 +113,7 @@ export function PanierProvider({ children }: { children: ReactNode }) {
       const existant = prev.find((l) => l.platId === platId);
       if (existant) {
         return prev.map((l) =>
-          l.platId === platId ? { ...l, quantite: l.quantite + quantite, note: note ?? l.note } : l,
+          l.platId === platId ? { ...l, quantite: Math.min(20, l.quantite + quantite), note: note ?? l.note } : l,
         );
       }
       return [...prev, { platId, quantite, note }];
@@ -107,25 +122,37 @@ export function PanierProvider({ children }: { children: ReactNode }) {
 
   const modifierQuantite = useCallback((platId: string, quantite: number) => {
     setBrut((prev) =>
-      quantite <= 0 ? prev.filter((l) => l.platId !== platId) : prev.map((l) => (l.platId === platId ? { ...l, quantite } : l)),
+      quantite <= 0
+        ? prev.filter((l) => l.platId !== platId)
+        : prev.map((l) => (l.platId === platId ? { ...l, quantite: Math.min(20, quantite) } : l)),
     );
   }, []);
 
   const vider = useCallback(() => setBrut([]), []);
 
   const passerCommande = useCallback<PanierContexte["passerCommande"]>(
-    ({ mode, emplacement, paiement }) => {
-      const maintenant = new Date();
-      const numero = String(140 + Math.floor(Math.random() * 860)).padStart(4, "0");
+    async ({ mode, emplacement, paiement }) => {
+      cle.current ??= cleIdempotence();
+      const type = TYPE_EMPLACEMENT[mode];
+      const reference = mode === "emporter" ? "" : referenceSaisie(type, emplacement);
+      const rep = await passerCommandePublique(
+        {
+          mode,
+          emplacement: mode === "emporter" ? undefined : { type, reference },
+          // Le backend ne stocke pas le mode de paiement : il est annoncé dans la note.
+          note: `Paiement prévu : ${MODES_PAIEMENT[paiement].libelle.toLowerCase()}`,
+          lignes: lignes.map((l) => ({ platId: l.platId, quantite: l.quantite, note: l.note })),
+        },
+        cle.current,
+      );
       const commande: CommandeLocale = {
-        numero,
-        statut: "recue",
+        jeton: rep.tracking_token,
+        numero: rep.number,
         mode,
-        emplacement,
+        emplacement: mode === "emporter" ? "Au comptoir" : emplacement,
         paiement,
-        payee: false,
-        passeeA: formatHeure(maintenant),
-        creeeLe: maintenant.getTime(),
+        total: montant(rep.total),
+        creeeLe: Date.now(),
         lignes: lignes.map((l) => ({
           platId: l.platId,
           nom: l.plat.nom,
@@ -133,15 +160,6 @@ export function PanierProvider({ children }: { children: ReactNode }) {
           prixUnitaire: l.plat.prix,
           note: l.note,
         })),
-        note: lignes.find((l) => l.note)?.note,
-        historique: [
-          {
-            heure: formatHeure(maintenant),
-            statut: "Reçue",
-            detail: "Commande passée depuis le menu",
-            couleur: COULEUR_HISTORIQUE.recue,
-          },
-        ],
       };
       enregistrerCommandeLocale(commande);
       setBrut([]);
@@ -155,13 +173,13 @@ export function PanierProvider({ children }: { children: ReactNode }) {
       lignes,
       nombreArticles: lignes.reduce((s, l) => s + l.quantite, 0),
       total: lignes.reduce((s, l) => s + l.sousTotal, 0),
-      pret,
+      pret: pret && menu !== null,
       ajouter,
       modifierQuantite,
       vider,
       passerCommande,
     }),
-    [lignes, pret, ajouter, modifierQuantite, vider, passerCommande],
+    [lignes, pret, menu, ajouter, modifierQuantite, vider, passerCommande],
   );
 
   return <Ctx.Provider value={valeur}>{children}</Ctx.Provider>;

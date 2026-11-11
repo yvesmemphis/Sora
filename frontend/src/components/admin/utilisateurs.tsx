@@ -1,16 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EntetePage, LigneTableau, Tableau } from "@/components/espace/barre-laterale";
 import { Icon } from "@/components/ui/icon";
 import { Modale } from "@/components/ui/modale";
 import { Avatar, Bouton, classeChamp, cx } from "@/components/ui/primitives";
-import { ROLES, UTILISATEURS, type Role } from "@/lib/demo/admin";
+import { messageErreur, toutesLesPages } from "@/lib/api/client";
+import { inviterEmploye, modifierEmploye, type Employe } from "@/lib/api/personnel";
+import { ROLE_BACKEND, ROLES, type Role } from "@/lib/demo/admin";
 import { initiales } from "@/lib/format";
+import { LIBELLE_ROLE } from "@/lib/staff/session";
 import type { Utilisateur } from "@/lib/types";
 import { PanneauPermissions } from "./permissions";
 
-const COLONNES = "2fr 1.1fr .9fr 1.2fr 36px";
+const COLONNES = "2fr 1.1fr .9fr 36px";
+
+function versUtilisateur(e: Employe): Utilisateur {
+  return {
+    id: e.id,
+    nom: `${e.first_name} ${e.last_name}`.trim() || e.email,
+    email: e.email,
+    role: LIBELLE_ROLE[e.role] as Role,
+    statut: e.is_active ? "Actif" : "Suspendu",
+    derniereConnexion: "",
+  };
+}
 
 const COULEUR_STATUT: Record<Utilisateur["statut"], string> = {
   Actif: "text-ok bg-ok",
@@ -20,7 +34,26 @@ const COULEUR_STATUT: Record<Utilisateur["statut"], string> = {
 
 /** A1 · Utilisateurs, rôles et permissions. */
 export function Utilisateurs() {
-  const [utilisateurs, setUtilisateurs] = useState(UTILISATEURS);
+  const [utilisateurs, setUtilisateurs] = useState<Utilisateur[]>([]);
+  const [chargement, setChargement] = useState(true);
+  const [erreur, setErreur] = useState<string | null>(null);
+
+  const charger = useCallback(async () => {
+    try {
+      const liste = await toutesLesPages<Employe>("/staff/");
+      setUtilisateurs(liste.map(versUtilisateur));
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setChargement(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement depuis l'API
+    void charger();
+  }, [charger]);
   const [recherche, setRecherche] = useState("");
   const [filtreRole, setFiltreRole] = useState<Role | "Tous">("Tous");
   const [invitation, setInvitation] = useState(false);
@@ -50,21 +83,30 @@ export function Utilisateurs() {
 
   const actifs = utilisateurs.filter((u) => u.statut === "Actif").length;
 
-  function inviter(nom: string, email: string, role: Role) {
-    // À brancher : POST /api/v1/staff/ (rôle backend via ROLE_BACKEND).
-    setUtilisateurs((prev) => [
-      ...prev,
-      { id: `USR-${String(prev.length + 20).padStart(4, "0")}`, nom, email, role, statut: "Invité", derniereConnexion: "Jamais" },
-    ]);
-    setInvitation(false);
+  async function inviter(nom: string, email: string, role: Role): Promise<string | null> {
+    const [prenom, ...reste] = nom.split(/\s+/);
+    try {
+      const cree = await inviterEmploye({ email, first_name: prenom ?? "", last_name: reste.join(" "), role: ROLE_BACKEND[role] });
+      setUtilisateurs((prev) => [...prev, versUtilisateur(cree)]);
+      setInvitation(false);
+      return null;
+    } catch (e) {
+      return messageErreur(e);
+    }
   }
 
-  function basculerSuspension(id: string) {
-    // À brancher : PATCH /api/v1/staff/{uuid}/ { is_active }.
-    setUtilisateurs((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, statut: u.statut === "Suspendu" ? "Actif" : "Suspendu" } : u)),
-    );
+  async function modifier(id: string, donnees: { role?: Role; actif?: boolean }) {
     setMenu(null);
+    try {
+      const maj = await modifierEmploye(id, {
+        ...(donnees.role ? { role: ROLE_BACKEND[donnees.role] } : {}),
+        ...(donnees.actif !== undefined ? { is_active: donnees.actif } : {}),
+      });
+      setUtilisateurs((prev) => prev.map((u) => (u.id === id ? versUtilisateur(maj) : u)));
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    }
   }
 
   return (
@@ -78,6 +120,11 @@ export function Utilisateurs() {
           </Bouton>
         }
       />
+      {erreur ? (
+        <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
+          {erreur}
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="flex min-w-0 flex-col self-start overflow-hidden rounded-2xl border border-ligne bg-papier">
           <div className="flex flex-wrap items-center gap-2 border-b border-ligne-3 px-[18px] py-3.5">
@@ -110,7 +157,7 @@ export function Utilisateurs() {
           <Tableau
             className="rounded-none border-0"
             colonnes={COLONNES}
-            entetes={["UTILISATEUR", "RÔLE", "STATUT", "DERNIÈRE CONNEXION", ""]}
+            entetes={["UTILISATEUR", "RÔLE", "STATUT", ""]}
             largeurMin={660}
           >
             {visibles.map((u, i) => (
@@ -129,7 +176,6 @@ export function Utilisateurs() {
                   <span className={cx("size-2 rounded-full", COULEUR_STATUT[u.statut].split(" ")[1])} />
                   {u.statut}
                 </span>
-                <span className="tabular text-[13px] text-texte-2">{u.derniereConnexion}</span>
                 <div>
                   <button
                     type="button"
@@ -149,17 +195,20 @@ export function Utilisateurs() {
                       style={position}
                       className="fixed z-30 flex w-52 flex-col overflow-hidden rounded-xl border border-ligne bg-papier text-sm shadow-[0_12px_30px_-12px_rgba(0,0,0,.3)]"
                     >
-                      <button type="button" onClick={() => setMenu(null)} className="cursor-pointer px-4 py-2.5 text-left hover:bg-sable">
-                        Modifier le rôle
-                      </button>
-                      {u.statut === "Invité" ? (
-                        <button type="button" onClick={() => setMenu(null)} className="cursor-pointer px-4 py-2.5 text-left hover:bg-sable">
-                          Renvoyer l&apos;invitation
+                      <span className="px-4 pt-2.5 pb-1 text-xs font-bold text-texte-3">Changer le rôle</span>
+                      {ROLES.filter((r) => r !== u.role).map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => void modifier(u.id, { role: r })}
+                          className="cursor-pointer px-4 py-2 text-left hover:bg-sable"
+                        >
+                          {r}
                         </button>
-                      ) : null}
+                      ))}
                       <button
                         type="button"
-                        onClick={() => basculerSuspension(u.id)}
+                        onClick={() => void modifier(u.id, { actif: u.statut === "Suspendu" })}
                         className={cx("cursor-pointer px-4 py-2.5 text-left hover:bg-sable", u.statut !== "Suspendu" && "text-danger")}
                       >
                         {u.statut === "Suspendu" ? "Réactiver le compte" : "Suspendre le compte"}
@@ -169,6 +218,9 @@ export function Utilisateurs() {
                 </div>
               </LigneTableau>
             ))}
+            {visibles.length === 0 ? (
+              <p className="px-5 py-6 text-center text-sm text-texte-3">{chargement ? "Chargement…" : "Aucun utilisateur."}</p>
+            ) : null}
           </Tableau>
         </div>
         <PanneauPermissions />
@@ -185,8 +237,10 @@ function ModaleInvitation({
 }: {
   ouverte: boolean;
   onFermer: () => void;
-  onInviter: (nom: string, email: string, role: Role) => void;
+  onInviter: (nom: string, email: string, role: Role) => Promise<string | null>;
 }) {
+  const [erreur, setErreur] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
   const [nom, setNom] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("Serveur");
@@ -196,12 +250,17 @@ function ModaleInvitation({
     <Modale ouverte={ouverte} onFermer={onFermer} titreId="titre-invitation" className="max-w-[480px]">
       <form
         className="flex flex-col gap-4 p-7"
-        onSubmit={(e) => {
+        onSubmit={async (e) => {
           e.preventDefault();
-          if (!valide) return;
-          onInviter(nom.trim(), email.trim(), role);
-          setNom("");
-          setEmail("");
+          if (!valide || envoi) return;
+          setEnvoi(true);
+          const err = await onInviter(nom.trim(), email.trim(), role);
+          setEnvoi(false);
+          setErreur(err);
+          if (!err) {
+            setNom("");
+            setEmail("");
+          }
         }}
       >
         <h2 id="titre-invitation" className="m-0 font-serif text-2xl font-semibold text-vert">
@@ -224,11 +283,12 @@ function ModaleInvitation({
             ))}
           </select>
         </label>
+        {erreur ? <span className="text-[13px] font-bold text-danger">{erreur}</span> : null}
         <div className="grid grid-cols-2 gap-2.5 pt-1">
           <Bouton variante="contour" hauteur="lg" onClick={onFermer}>
             Annuler
           </Bouton>
-          <Bouton type="submit" hauteur="lg" disabled={!valide}>
+          <Bouton type="submit" hauteur="lg" disabled={!valide || envoi}>
             Envoyer l&apos;invitation
           </Bouton>
         </div>

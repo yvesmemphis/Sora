@@ -3,21 +3,25 @@
 import { useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Bouton, Historique, Puce, cx } from "@/components/ui/primitives";
-import { totalCommande } from "@/lib/demo/commandes";
 import { formatFCFA } from "@/lib/format";
 import { MODES_PAIEMENT, MODES_SERVICE, STATUTS_COMMANDE } from "@/lib/statuts";
 import { useService } from "@/lib/staff/service";
-import type { Commande } from "@/lib/types";
-import { SERVEUR_DEMO } from "./barre-salle";
+import type { Commande, ModePaiement, StatutCommande } from "@/lib/types";
 import { ModaleAnnulation } from "./modale-annulation";
-import { ModaleEmplacement } from "./modale-emplacement";
+
+/** Total serveur si connu, sinon somme des lignes. */
+export function totalCommande(c: Pick<Commande, "lignes" | "total">): number {
+  return c.total ?? c.lignes.reduce((s, l) => s + l.quantite * l.prixUnitaire, 0);
+}
+
+const TERMINEES: StatutCommande[] = ["annulee", "refusee", "cloturee"];
 
 type Filtre = "toutes" | "servir" | "encaisser" | "cuisine";
 
 const FILTRES: { cle: Filtre; libelle: string; test: (c: Commande) => boolean }[] = [
   { cle: "toutes", libelle: "Toutes", test: () => true },
   { cle: "servir", libelle: "À servir", test: (c) => c.statut === "prete" },
-  { cle: "encaisser", libelle: "À encaisser", test: (c) => !c.payee && c.statut !== "annulee" },
+  { cle: "encaisser", libelle: "À encaisser", test: (c) => !c.payee && !TERMINEES.includes(c.statut) },
   { cle: "cuisine", libelle: "En cuisine", test: (c) => c.statut === "confirmee" || c.statut === "preparation" },
 ];
 
@@ -25,35 +29,44 @@ const APPARENCE_PAYEE = { libelle: "Payée", icone: "check" as const, classes: "
 const APPARENCE_A_ENCAISSER = { libelle: "À encaisser", icone: "wallet" as const, classes: "text-attention bg-attention-fond-2" };
 
 /** Action suivante proposée au serveur selon le statut. */
-function actionSuivante(c: Commande): { libelle: string; possible: boolean } {
+function actionSuivante(c: Commande): { libelle: string; cible: StatutCommande | null } {
   switch (c.statut) {
     case "recue":
-      return { libelle: "Désistement possible pendant 5 min", possible: false };
+      return { libelle: "Confirmer et transmettre en cuisine", cible: "confirmee" };
     case "confirmee":
     case "preparation":
-      return { libelle: "En cuisine · à servir quand prête", possible: false };
+      return { libelle: "En cuisine · à servir quand prête", cible: null };
     case "prete":
-      return {
-        libelle: c.mode === "chambre" ? "Marquer comme livrée" : c.mode === "emporter" ? "Marquer comme remise" : "Marquer comme servie",
-        possible: true,
-      };
+      return c.mode === "chambre"
+        ? { libelle: "Partir en livraison", cible: "livraison" }
+        : { libelle: c.mode === "emporter" ? "Marquer comme remise" : "Marquer comme servie", cible: "servie" };
+    case "livraison":
+      return { libelle: "Marquer comme livrée", cible: "servie" };
     case "servie":
-      return { libelle: c.payee ? "Clôturer la commande" : "Encaisser avant de clôturer", possible: c.payee };
+      return c.payee ? { libelle: "Clôturer la commande", cible: "cloturee" } : { libelle: "Encaisser pour clôturer", cible: null };
     default:
-      return { libelle: "Commande terminée", possible: false };
+      return { libelle: "Commande terminée", cible: null };
   }
 }
 
 /** S1 · Commandes du service, avec le détail de la commande sélectionnée. */
 export function CommandesService() {
-  const { commandes, selection, selectionner, changerStatut, marquerPayee, cloturer } = useService();
+  const { commandes, chargement, selection, selectionner, changerStatut, marquerPayee } = useService();
   const [filtre, setFiltre] = useState<Filtre>("toutes");
   const [annulation, setAnnulation] = useState(false);
-  const [emplacement, setEmplacement] = useState(false);
+  const [modeChoisi, setModeChoisi] = useState<{ numero: string; mode: ModePaiement } | null>(null);
+  const [envoi, setEnvoi] = useState(false);
 
-  const actives = commandes.filter((c) => c.statut !== "annulee");
+  const actives = commandes.filter((c) => !TERMINEES.includes(c.statut));
   const visibles = commandes.filter(FILTRES.find((f) => f.cle === filtre)!.test);
   const sel = commandes.find((c) => c.numero === selection) ?? null;
+  const modePaiement = sel && modeChoisi?.numero === sel.numero ? modeChoisi.mode : (sel?.paiement ?? "especes");
+
+  async function agir(f: () => Promise<boolean>) {
+    setEnvoi(true);
+    await f();
+    setEnvoi(false);
+  }
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[440px_1fr]">
@@ -100,7 +113,7 @@ export function CommandesService() {
                   <span className="tabular text-right text-[13px] text-texte-3">{c.passeeA}</span>
                   <span className="flex flex-wrap gap-1.5">
                     <Badge apparence={STATUTS_COMMANDE[c.statut]} libelle={c.statut === "servie" ? "Servie" : undefined} />
-                    {c.statut !== "annulee" ? <Badge apparence={c.payee ? APPARENCE_PAYEE : APPARENCE_A_ENCAISSER} /> : null}
+                    {!["annulee", "refusee"].includes(c.statut) ? <Badge apparence={c.payee ? APPARENCE_PAYEE : APPARENCE_A_ENCAISSER} /> : null}
                   </span>
                   <span className="tabular text-right text-[15px] font-bold">{formatFCFA(totalCommande(c))}</span>
                 </button>
@@ -109,7 +122,7 @@ export function CommandesService() {
           })}
           {visibles.length === 0 ? (
             <li className="rounded-2xl border border-dashed border-bordure p-6 text-center text-sm text-texte-3">
-              Aucune commande dans ce filtre.
+              {chargement ? "Chargement des commandes…" : "Aucune commande dans ce filtre."}
             </li>
           ) : null}
         </ul>
@@ -137,11 +150,6 @@ export function CommandesService() {
                 {MODES_SERVICE[sel.mode].long(sel.emplacement)} · passée à {sel.passeeA}
               </span>
             </div>
-            {sel.statut !== "annulee" && sel.statut !== "servie" ? (
-              <Bouton variante="fantome" hauteur="lg" icone="edit" onClick={() => setEmplacement(true)}>
-                Modifier l&apos;emplacement
-              </Bouton>
-            ) : null}
           </div>
 
           <div className="grid gap-[18px] xl:grid-cols-[1.25fr_1fr]">
@@ -172,31 +180,34 @@ export function CommandesService() {
               <div className="flex flex-col gap-3.5 rounded-2xl border border-ligne bg-papier p-[18px]">
                 <span className="text-[13px] font-bold tracking-[.12em] text-texte-3">PAIEMENT</span>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="flex items-center gap-2.5 text-[17px] font-bold">
-                    <Icon name={MODES_PAIEMENT[sel.paiement].icone} className="size-6 text-vert" />
-                    {MODES_PAIEMENT[sel.paiement].libelle}
-                  </span>
+                  {sel.payee ? (
+                    <span className="flex items-center gap-2.5 text-[17px] font-bold">
+                      <Icon name={MODES_PAIEMENT[sel.paiement].icone} className="size-6 text-vert" />
+                      {MODES_PAIEMENT[sel.paiement].libelle}
+                    </span>
+                  ) : (
+                    <div className="flex gap-1.5" role="group" aria-label="Mode de paiement">
+                      {(Object.keys(MODES_PAIEMENT) as ModePaiement[]).map((m) => (
+                        <Puce key={m} actif={m === modePaiement} onClick={() => setModeChoisi({ numero: sel.numero, mode: m })}>
+                          {MODES_PAIEMENT[m].libelle}
+                        </Puce>
+                      ))}
+                    </div>
+                  )}
                   <Badge apparence={sel.payee ? APPARENCE_PAYEE : APPARENCE_A_ENCAISSER} taille="md" />
                 </div>
-                {!sel.payee && sel.statut !== "recue" && sel.statut !== "annulee" ? (
+                {!sel.payee && !TERMINEES.includes(sel.statut) && sel.statut !== "recue" ? (
                   <Bouton
                     hauteur="xl"
                     icone="check"
                     className="text-[17px]"
-                    onClick={() => marquerPayee(sel.numero, SERVEUR_DEMO.nom)}
+                    disabled={envoi}
+                    onClick={() => agir(() => marquerPayee(sel.numero, modePaiement))}
                   >
                     Marquer comme payé · {formatFCFA(totalCommande(sel))}
                   </Bouton>
                 ) : null}
-                {sel.payee ? (
-                  <span className="text-sm font-medium text-ok">
-                    Paiement enregistré{" "}
-                    {sel.historique.find((h) => h.statut === "Payée")
-                      ? `à ${sel.historique.find((h) => h.statut === "Payée")!.heure}`
-                      : ""}
-                    .
-                  </span>
-                ) : null}
+                {sel.payee ? <span className="text-sm font-medium text-ok">Paiement enregistré.</span> : null}
                 <span className="text-[13px] text-texte-3">Paiement en totalité uniquement. Rien n&apos;est encaissé en ligne.</span>
               </div>
             </div>
@@ -206,23 +217,18 @@ export function CommandesService() {
                 <span className="text-[13px] font-bold tracking-[.12em] text-texte-3">HISTORIQUE</span>
                 <Historique evenements={sel.historique} largeurHeure={60} />
               </div>
-              {sel.statut !== "annulee" ? (
+              {!TERMINEES.includes(sel.statut) ? (
                 <div className="mt-auto flex flex-col gap-2.5">
                   {(() => {
                     const a = actionSuivante(sel);
+                    const cible = a.cible;
                     return (
                       <Bouton
                         variante="contour"
                         hauteur="xl"
-                        icone={sel.statut === "servie" ? "lock" : "truck"}
-                        disabled={!a.possible}
-                        onClick={() => {
-                          if (sel.statut === "prete") changerStatut(sel.numero, "servie", SERVEUR_DEMO.nom);
-                          else if (sel.statut === "servie") {
-                            cloturer(sel.numero);
-                            selectionner(null);
-                          }
-                        }}
+                        icone={sel.statut === "servie" ? "lock" : sel.statut === "recue" ? "check" : "truck"}
+                        disabled={!cible || envoi}
+                        onClick={() => cible && agir(() => changerStatut(sel.numero, cible))}
                       >
                         {a.libelle}
                       </Bouton>
@@ -245,12 +251,6 @@ export function CommandesService() {
       {sel ? (
         <>
           <ModaleAnnulation key={`a-${sel.numero}`} commande={sel} ouverte={annulation} onFermer={() => setAnnulation(false)} />
-          <ModaleEmplacement
-            key={`e-${sel.numero}-${emplacement}`}
-            commande={sel}
-            ouverte={emplacement}
-            onFermer={() => setEmplacement(false)}
-          />
         </>
       ) : null}
     </div>

@@ -59,6 +59,8 @@ interface Options {
   /** false pour les routes publiques (connexion, réinitialisation). */
   auth?: boolean;
   signal?: AbortSignal;
+  /** En-têtes supplémentaires (ex. `Idempotency-Key`). */
+  headers?: Record<string, string>;
 }
 
 let rafraichissementEnCours: Promise<string | null> | null = null;
@@ -100,7 +102,7 @@ async function lireErreur(rep: Response): Promise<ApiError> {
   }
 }
 
-export async function api<T = unknown>(chemin: string, { method = "GET", body, auth = true, signal }: Options = {}): Promise<T> {
+export async function api<T = unknown>(chemin: string, { method = "GET", body, auth = true, signal, headers }: Options = {}): Promise<T> {
   const envoyer = (access?: string) =>
     fetch(`${API_URL}${chemin.startsWith("/") ? chemin : `/${chemin}`}`, {
       method,
@@ -109,6 +111,7 @@ export async function api<T = unknown>(chemin: string, { method = "GET", body, a
         Accept: "application/json",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(access ? { Authorization: `Bearer ${access}` } : {}),
+        ...headers,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -130,10 +133,48 @@ export async function api<T = unknown>(chemin: string, { method = "GET", body, a
   return (await rep.json()) as T;
 }
 
+/** Vrai si un jeton est présent (sans garantie de validité). */
+export function estConnecte(): boolean {
+  return !!lireJetons()?.access;
+}
+
+/** Clé d'idempotence aléatoire (≤ 64 caractères) pour les créations. */
+export function cleIdempotence(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+/** Message lisible pour l'utilisateur à partir de n'importe quelle erreur. */
+export function messageErreur(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.code === "validation_error" && e.details && typeof e.details === "object") {
+      const premier = Object.values(e.details as Record<string, unknown>)[0];
+      const texte = Array.isArray(premier) ? premier[0] : premier;
+      if (typeof texte === "string") return texte;
+    }
+    return e.message;
+  }
+  return "Erreur inattendue.";
+}
+
 /** Réponse paginée standard du backend (`common/pagination.py`). */
 export interface Page<T> {
   count: number;
   next: string | null;
   previous: string | null;
   results: T[];
+}
+
+/** Récupère toutes les pages d'une liste paginée (bornée à 20 pages). */
+export async function toutesLesPages<T>(chemin: string, signal?: AbortSignal): Promise<T[]> {
+  const sep = chemin.includes("?") ? "&" : "?";
+  const resultats: T[] = [];
+  for (let page = 1; page <= 20; page++) {
+    const rep = await api<Page<T> | T[]>(`${chemin}${sep}page=${page}&page_size=100`, { signal });
+    if (Array.isArray(rep)) return rep; // vue non paginée
+    resultats.push(...rep.results);
+    if (!rep.next) break;
+  }
+  return resultats;
 }

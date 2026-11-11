@@ -1,14 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { EntetePage, LigneTableau, Tableau } from "@/components/espace/barre-laterale";
 import { Bouton, Carte, Interrupteur } from "@/components/ui/primitives";
-import { DESCRIPTION_ROLES, PERMISSIONS, ROLE_BACKEND, ROLES, UTILISATEURS, type Role } from "@/lib/demo/admin";
+import { toutesLesPages } from "@/lib/api/client";
+import type { Employe } from "@/lib/api/personnel";
+import { DESCRIPTION_ROLES, PERMISSIONS, ROLE_BACKEND, ROLES, type Role } from "@/lib/demo/admin";
 
 const COLONNES = "2fr repeat(4, 1fr)";
 
 /** Vue d'ensemble des permissions : tous les rôles côte à côte. */
 export function MatricePermissions() {
+  const [comptes, setComptes] = useState<Employe[] | null>(null);
+  useEffect(() => {
+    toutesLesPages<Employe>("/staff/")
+      .then(setComptes)
+      .catch(() => setComptes(null));
+  }, []);
   const [matrice, setMatrice] = useState<Record<string, Role[]>>(() =>
     Object.fromEntries(PERMISSIONS.map((p) => [p.nom, p.roles])),
   );
@@ -39,7 +47,7 @@ export function MatricePermissions() {
             </div>
             <span className="text-[13px] leading-[19px] text-texte-2">{DESCRIPTION_ROLES[r]}</span>
             <span className="mt-auto text-xs font-bold text-texte-3">
-              {UTILISATEURS.filter((u) => u.role === r).length} compte(s)
+              {comptes ? `${comptes.filter((u) => u.role === ROLE_BACKEND[r] && u.is_active).length} compte(s) actif(s)` : "—"}
             </span>
           </Carte>
         ))}

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { Icon, type NomIcone } from "@/components/ui/icon";
 import { LogoMark, cx } from "@/components/ui/primitives";
+import { useSession } from "@/lib/staff/session";
 
 export interface EntreeNavigation {
   href: string;
@@ -16,16 +17,9 @@ export interface EntreeNavigation {
  * Barre latérale des espaces bureau (gestion, administration).
  * Sur petit écran, elle devient un bandeau avec un menu déroulant.
  */
-export function BarreLaterale({
-  sousTitre,
-  entrees,
-  utilisateur,
-}: {
-  sousTitre: string;
-  entrees: EntreeNavigation[];
-  utilisateur: { nom: string; initiales: string; role: string };
-}) {
+export function BarreLaterale({ sousTitre, entrees }: { sousTitre: string; entrees: EntreeNavigation[] }) {
   const chemin = usePathname();
+  const utilisateur = useSession();
   const [ouvert, setOuvert] = useState(false);
   const racine = entrees[0]?.href;
   const estActif = (href: string) => (href === racine ? chemin === href : chemin.startsWith(href));
@@ -72,9 +66,14 @@ export function BarreLaterale({
         <span className="font-bold">{utilisateur.nom}</span>
         <span className="opacity-75">{utilisateur.role}</span>
       </div>
-      <Link href="/connexion" aria-label="Se déconnecter" className="rounded-lg p-1.5 opacity-75 hover:bg-creme/10 hover:opacity-100">
+      <button
+        type="button"
+        onClick={() => void utilisateur.seDeconnecter()}
+        aria-label="Se déconnecter"
+        className="cursor-pointer rounded-lg p-1.5 opacity-75 hover:bg-creme/10 hover:opacity-100"
+      >
         <Icon name="logout" className="size-[18px]" />
-      </Link>
+      </button>
     </div>
   );
 

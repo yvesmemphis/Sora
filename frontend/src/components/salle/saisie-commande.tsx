@@ -4,18 +4,19 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Bouton, Puce, Quantite, cx } from "@/components/ui/primitives";
-import { CATEGORIES, PLATS } from "@/lib/demo/menu";
 import { formatFCFA } from "@/lib/format";
 import { DISPONIBILITES, MODES_PAIEMENT, MODES_SERVICE } from "@/lib/statuts";
 import { useService } from "@/lib/staff/service";
 import type { Categorie, ModePaiement, ModeService } from "@/lib/types";
-import { SERVEUR_DEMO } from "./barre-salle";
 
 /** S2 · Saisie d'une commande par le serveur. */
 export function SaisieCommande() {
   const router = useRouter();
-  const { creer, indisponibilites } = useService();
-  const [categorie, setCategorie] = useState<Categorie>("Plats");
+  const { creer, carte, emplacements } = useService();
+  const PLATS = carte.plats;
+  const CATEGORIES = carte.categories;
+  const [choixCategorie, setCategorie] = useState<Categorie | null>(null);
+  const categorie = choixCategorie ?? CATEGORIES[0] ?? "";
   const [recherche, setRecherche] = useState("");
   const [brouillon, setBrouillon] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<ModeService>("table");
@@ -23,35 +24,41 @@ export function SaisieCommande() {
   const [paiement, setPaiement] = useState<ModePaiement>("especes");
   const [note, setNote] = useState("");
   const [differee, setDifferee] = useState(false);
+  const [envoi, setEnvoi] = useState(false);
 
   const plats = useMemo(() => {
     const q = recherche.trim().toLowerCase();
-    return PLATS.filter((p) => (q ? p.nom.toLowerCase().includes(q) : p.categorie === categorie)).map((p) => ({
-      ...p,
-      disponibilite: indisponibilites[p.id] ?? p.disponibilite,
-    }));
-  }, [categorie, recherche, indisponibilites]);
+    return PLATS.filter((p) => (q ? p.nom.toLowerCase().includes(q) : p.categorie === categorie));
+  }, [PLATS, categorie, recherche]);
 
   const lignes = Object.entries(brouillon)
     .filter(([, q]) => q > 0)
-    .map(([id, q]) => ({ plat: PLATS.find((p) => p.id === id)!, quantite: q }));
+    .flatMap(([id, q]) => {
+      const plat = PLATS.find((p) => p.id === id);
+      return plat ? [{ plat, quantite: q }] : [];
+    });
   const total = lignes.reduce((s, l) => s + l.plat.prix * l.quantite, 0);
   const requis = mode !== "emporter";
   const valide = lignes.length > 0 && (!requis || emplacement.trim() !== "");
 
   const regler = (id: string, q: number) => setBrouillon((b) => ({ ...b, [id]: Math.max(0, q) }));
 
-  function enregistrer() {
-    if (!valide) return;
-    creer({
+  const references = emplacements
+    .filter((e) => e.is_active && e.type === (mode === "chambre" ? "ROOM" : "TABLE"))
+    .map((e) => (e.type === "TABLE" ? e.reference.replace(/^T/i, "") : e.reference));
+
+  async function enregistrer() {
+    if (!valide || envoi) return;
+    setEnvoi(true);
+    const cree = await creer({
       mode,
       emplacement: requis ? emplacement.trim() : "Au comptoir",
       paiement,
       lignes: lignes.map((l) => ({ platId: l.plat.id, quantite: l.quantite })),
       note: [note.trim(), differee ? "Saisie différée" : ""].filter(Boolean).join(" · ") || undefined,
-      acteur: SERVEUR_DEMO.nom,
     });
-    router.push("/salle");
+    setEnvoi(false);
+    if (cree) router.push("/salle");
   }
 
   return (
@@ -104,7 +111,7 @@ export function SaisieCommande() {
                   </span>
                   <span className="flex items-center gap-1.5 text-[13px] text-texte-3">
                     <Icon name="clock" className="size-3.5" />
-                    {p.preparationMin} min
+                    {p.preparationMin ? `${p.preparationMin} min` : "—"}
                   </span>
                   <span className="mt-auto flex flex-wrap items-center justify-between gap-1.5">
                     <span className="tabular text-[15px] font-bold text-vert">{formatFCFA(p.prix)}</span>
@@ -150,9 +157,15 @@ export function SaisieCommande() {
               value={emplacement}
               onChange={(e) => setEmplacement(e.target.value)}
               inputMode="numeric"
+              list="emplacements-connus"
               placeholder={mode === "table" ? "Ex. 6" : "Ex. 204"}
               className="h-[52px] rounded-xl border-[1.5px] border-vert px-3.5 text-lg font-bold outline-none"
             />
+            <datalist id="emplacements-connus">
+              {references.map((r) => (
+                <option key={r} value={r} />
+              ))}
+            </datalist>
           </label>
         ) : null}
 
@@ -210,7 +223,7 @@ export function SaisieCommande() {
           />
           Saisie différée (commande prise plus tôt)
         </label>
-        <Bouton hauteur="xl" onClick={enregistrer} disabled={!valide}>
+        <Bouton hauteur="xl" onClick={enregistrer} disabled={!valide || envoi}>
           Enregistrer · {formatFCFA(total)}
         </Bouton>
       </section>

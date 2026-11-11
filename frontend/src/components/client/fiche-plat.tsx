@@ -4,18 +4,41 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Quantite, cx } from "@/components/ui/primitives";
+import Link from "next/link";
+import { use } from "react";
+import { useMenu } from "@/lib/client/menu";
 import { usePanier } from "@/lib/client/panier";
 import { formatFCFA } from "@/lib/format";
 import { DISPONIBILITES } from "@/lib/statuts";
 import type { Plat } from "@/lib/types";
 
+/** Résout le plat de l'URL dans la carte chargée depuis l'API. */
+export function FichePlatDepuisUrl({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = use(params);
+  const { menu, erreur, trouverPlat } = useMenu();
+  const plat = trouverPlat(decodeURIComponent(slug));
+  if (plat) return <FichePlat plat={plat} commandesOuvertes={menu?.commandesOuvertes ?? false} />;
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-8 text-center">
+      <p className="text-[15px] text-texte-2">
+        {!menu && !erreur ? "Chargement…" : erreur && !menu ? erreur : "Ce plat n'est plus à la carte."}
+      </p>
+      {menu || erreur ? (
+        <Link href="/menu" className="flex h-12 items-center rounded-xl bg-terracotta px-5 font-bold text-creme">
+          Voir la carte
+        </Link>
+      ) : null}
+    </div>
+  );
+}
+
 /** C2 · Fiche plat. */
-export function FichePlat({ plat }: { plat: Plat }) {
+export function FichePlat({ plat, commandesOuvertes = true }: { plat: Plat; commandesOuvertes?: boolean }) {
   const router = useRouter();
   const { ajouter } = usePanier();
   const [quantite, setQuantite] = useState(1);
   const [note, setNote] = useState("");
-  const disponible = plat.disponibilite === "disponible";
+  const disponible = plat.disponibilite === "disponible" && commandesOuvertes;
   const dispo = DISPONIBILITES[plat.disponibilite];
 
   function valider() {
@@ -25,8 +48,11 @@ export function FichePlat({ plat }: { plat: Plat }) {
 
   return (
     <div className="flex min-h-dvh flex-col">
-      <div className="photo-placeholder relative flex h-[310px] shrink-0 items-center justify-center font-mono text-xs text-[#7A7166]">
-        photo du plat · 4:3 · vue à 45°
+      <div
+        className="photo-placeholder relative flex h-[310px] shrink-0 items-center justify-center bg-cover bg-center font-mono text-xs text-[#7A7166]"
+        style={plat.image ? { backgroundImage: `url(${JSON.stringify(plat.image)})` } : undefined}
+      >
+        {plat.image ? null : "photo du plat · 4:3 · vue à 45°"}
         <button
           type="button"
           onClick={() => router.back()}
@@ -52,7 +78,7 @@ export function FichePlat({ plat }: { plat: Plat }) {
         <div className="grid grid-cols-3 gap-2">
           <div className="flex flex-col gap-1 rounded-xl border border-ligne bg-papier p-2.5">
             <Icon name="clock" className="size-5 text-vert" />
-            <span className="text-sm font-bold">{plat.preparationMin} min</span>
+            <span className="text-sm font-bold">{plat.preparationMin ? `${plat.preparationMin} min` : "—"}</span>
             <span className="text-xs text-texte-3">Préparation</span>
           </div>
           <div className="flex flex-col gap-1 rounded-xl border border-ligne bg-papier p-2.5">
@@ -125,7 +151,7 @@ export function FichePlat({ plat }: { plat: Plat }) {
         ) : (
           <div className="flex h-14 flex-1 items-center justify-center gap-2 rounded-xl bg-sable-2 text-[15px] font-bold text-texte-2">
             <Icon name={dispo.icone} className="size-5" />
-            {plat.disponibilite === "epuise" ? "Épuisé pour ce service" : "Momentanément indisponible"}
+            {!commandesOuvertes ? "Commandes fermées" : plat.disponibilite === "epuise" ? "Épuisé pour ce service" : "Momentanément indisponible"}
           </div>
         )}
       </div>

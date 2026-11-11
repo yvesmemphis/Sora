@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import environ
+from corsheaders.defaults import default_headers
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -56,6 +57,9 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# Le front envoie `Idempotency-Key` sur les créations de commande (POST /orders/, /public/orders/).
+CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
 
 ROOT_URLCONF = "config.urls"
 ASGI_APPLICATION = "config.asgi.application"

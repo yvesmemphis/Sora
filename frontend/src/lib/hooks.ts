@@ -43,3 +43,15 @@ export function useEnLigne(): boolean {
   }, []);
   return enLigne;
 }
+
+/** Horodatage courant (ms), rafraîchi chaque seconde ; 0 avant l'hydratation. */
+export function useMaintenant(intervalleMs = 1000): number {
+  const [maintenant, setMaintenant] = useState(0);
+  useEffect(() => {
+    const maj = () => setMaintenant(Date.now());
+    maj();
+    const iv = setInterval(maj, intervalleMs);
+    return () => clearInterval(iv);
+  }, [intervalleMs]);
+  return maintenant;
+}

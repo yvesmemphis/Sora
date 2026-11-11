@@ -2,7 +2,7 @@
 
 import { Icon } from "@/components/ui/icon";
 import { Modale } from "@/components/ui/modale";
-import { trouverPlat } from "@/lib/demo/menu";
+import { useService } from "@/lib/staff/service";
 import { MODES_PAIEMENT, MODES_SERVICE } from "@/lib/statuts";
 import type { Commande } from "@/lib/types";
 
@@ -10,10 +10,11 @@ const TIRETS = "--------------------------------";
 
 /** K3 · Ticket de secours 80 mm, imprimable même en cas de coupure réseau. */
 export function TicketSecours({ commande, onFermer }: { commande: Commande; onFermer: () => void }) {
+  const { carte } = useService();
   const maintenant = new Date();
   const hh = (n: number) => String(n).padStart(2, "0");
   const heure = `${hh(maintenant.getHours())}:${hh(maintenant.getMinutes())}`;
-  const preparation = Math.max(...commande.lignes.map((l) => trouverPlat(l.platId)?.preparationMin ?? 15));
+  const preparation = Math.max(...commande.lignes.map((l) => carte.plats.find((p) => p.id === l.platId)?.preparationMin ?? 15));
 
   return (
     <Modale ouverte onFermer={onFermer} titreId="titre-ticket" className="max-w-[380px] bg-transparent shadow-none" fond="bg-[rgba(8,14,12,.7)]">
@@ -28,7 +29,11 @@ export function TicketSecours({ commande, onFermer }: { commande: Commande; onFe
             <span>N° {commande.numero}</span>
             <span>{heure}</span>
           </span>
-          <span>{MODES_SERVICE[commande.mode].long(commande.emplacement).replace(", chambre", "")}</span>
+          <span>
+            {commande.emplacement === "—"
+              ? MODES_SERVICE[commande.mode].libelle
+              : MODES_SERVICE[commande.mode].long(commande.emplacement).replace(", chambre", "")}
+          </span>
           <span>Paiement : {MODES_PAIEMENT[commande.paiement].libelle.toLowerCase()}</span>
           <span>{TIRETS}</span>
           {commande.lignes.map((l) => (

@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Logo, cx } from "@/components/ui/primitives";
+import { memoriserEmplacementQr, useMenu } from "@/lib/client/menu";
 import { usePanier } from "@/lib/client/panier";
-import { CATEGORIES, PLAT_DU_JOUR_SLUG, PLATS, trouverPlat } from "@/lib/demo/menu";
 import { formatFCFA } from "@/lib/format";
 import { DISPONIBILITES } from "@/lib/statuts";
 import type { Categorie } from "@/lib/types";
@@ -14,15 +14,23 @@ import { BarrePanier } from "./barre-panier";
 /** C1 · Carte du restaurant. */
 export function CarteRestaurant() {
   const { ajouter, nombreArticles } = usePanier();
-  const [categorie, setCategorie] = useState<Categorie>("Plats");
+  const { menu, erreur, recharger } = useMenu();
+  const PLATS = useMemo(() => menu?.plats ?? [], [menu]);
+  const CATEGORIES = menu?.categories ?? [];
+  const [choix, setCategorie] = useState<Categorie | null>(null);
+  const categorie = choix && CATEGORIES.includes(choix) ? choix : (CATEGORIES.find((c) => c === "Plats") ?? CATEGORIES[0] ?? "");
   const [recherche, setRecherche] = useState("");
-  const platDuJour = trouverPlat(PLAT_DU_JOUR_SLUG);
+  // Plat mis en avant : le premier de la catégorie « Plats », s'il existe.
+  const platDuJour = PLATS.find((p) => p.categorie === "Plats");
+
+  // QR code de table ou de chambre : `/menu?table=T6`.
+  useEffect(() => memoriserEmplacementQr(new URLSearchParams(window.location.search)), []);
 
   const plats = useMemo(() => {
     const q = recherche.trim().toLowerCase();
     if (q) return PLATS.filter((p) => `${p.nom} ${p.description}`.toLowerCase().includes(q));
     return PLATS.filter((p) => p.categorie === categorie);
-  }, [categorie, recherche]);
+  }, [PLATS, categorie, recherche]);
 
   return (
     <>
@@ -55,6 +63,21 @@ export function CarteRestaurant() {
           </p>
         </div>
 
+        {erreur && !menu ? (
+          <div role="alert" className="flex flex-col items-start gap-2 rounded-2xl bg-danger-fond p-4 text-sm text-danger">
+            <span className="font-bold">La carte n&apos;a pas pu être chargée.</span>
+            <span>{erreur}</span>
+            <button type="button" onClick={recharger} className="cursor-pointer font-bold underline">
+              Réessayer
+            </button>
+          </div>
+        ) : null}
+        {menu && !menu.commandesOuvertes ? (
+          <div role="status" className="rounded-2xl bg-attention-fond p-4 text-sm font-bold text-attention">
+            Les commandes en ligne sont fermées pour le moment. La carte reste consultable.
+          </div>
+        ) : null}
+
         <label className="flex h-12 items-center gap-2.5 rounded-xl border border-ligne-2 bg-papier px-3.5 text-texte-3 focus-within:border-vert">
           <Icon name="search" className="size-5" />
           <span className="sr-only">Rechercher un plat</span>
@@ -86,7 +109,7 @@ export function CarteRestaurant() {
           </nav>
         ) : null}
 
-        {platDuJour && !recherche && categorie === "Plats" ? (
+        {platDuJour && !recherche && categorie === "Plats" && menu?.commandesOuvertes ? (
           <div className="grid shrink-0 grid-cols-[1fr_128px] overflow-hidden rounded-2xl bg-vert text-creme">
             <div className="flex flex-col gap-1.5 py-4 pl-[18px]">
               <span className="text-[11px] font-bold tracking-[.16em] text-or">PLAT DU JOUR</span>
@@ -94,7 +117,7 @@ export function CarteRestaurant() {
                 {platDuJour.nom}
               </Link>
               <span className="text-[13px] opacity-85">
-                {formatFCFA(platDuJour.prix)} · prêt en {platDuJour.preparationMin} min
+                {formatFCFA(platDuJour.prix)}
               </span>
               <button
                 type="button"
@@ -123,10 +146,11 @@ export function CarteRestaurant() {
             <li key={p.id} className="grid grid-cols-[88px_1fr] gap-3 rounded-2xl border border-ligne bg-papier p-2.5">
               <Link
                 href={`/menu/${p.slug}`}
-                className="photo-placeholder flex size-[88px] items-end justify-center rounded-xl pb-1.5 font-mono text-[9px] text-[#7A7166]"
+                className="photo-placeholder flex size-[88px] items-end justify-center overflow-hidden rounded-xl bg-cover bg-center pb-1.5 font-mono text-[9px] text-[#7A7166]"
+                style={p.image ? { backgroundImage: `url(${JSON.stringify(p.image)})` } : undefined}
                 aria-label={`Voir ${p.nom}`}
               >
-                photo
+                {p.image ? null : "photo"}
               </Link>
               <div className="flex min-w-0 flex-col gap-1">
                 <Link href={`/menu/${p.slug}`} className="text-base leading-5 font-bold">
@@ -135,7 +159,7 @@ export function CarteRestaurant() {
                 <span className="text-[13px] leading-[17px] text-texte-3">{p.description}</span>
                 <div className="mt-auto flex items-center justify-between gap-2">
                   <span className="tabular text-[15px] font-bold text-vert">{formatFCFA(p.prix)}</span>
-                  {p.disponibilite === "disponible" ? (
+                  {p.disponibilite === "disponible" && menu?.commandesOuvertes ? (
                     <button
                       type="button"
                       onClick={() => ajouter(p.id)}
@@ -144,16 +168,16 @@ export function CarteRestaurant() {
                       <Icon name="plus" className="size-4" />
                       Ajouter
                     </button>
-                  ) : (
+                  ) : p.disponibilite !== "disponible" ? (
                     <Badge apparence={DISPONIBILITES[p.disponibilite]} />
-                  )}
+                  ) : null}
                 </div>
               </div>
             </li>
           ))}
           {plats.length === 0 ? (
             <li className="rounded-2xl border border-dashed border-bordure p-6 text-center text-sm text-texte-3">
-              Aucun plat ne correspond à « {recherche} ».
+              {!menu ? "Chargement de la carte…" : recherche ? `Aucun plat ne correspond à « ${recherche} ».` : "Aucun plat dans cette catégorie."}
             </li>
           ) : null}
         </ul>

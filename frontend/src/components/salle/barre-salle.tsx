@@ -5,9 +5,8 @@ import { usePathname } from "next/navigation";
 import { Icon } from "@/components/ui/icon";
 import { LogoMark, cx } from "@/components/ui/primitives";
 import { useEnLigne, useHorloge } from "@/lib/hooks";
-
-/** Utilisateur de démonstration ; viendra de `/auth/me/`. */
-export const SERVEUR_DEMO = { nom: "Awa K.", initiales: "AK", role: "Serveuse" };
+import { useService } from "@/lib/staff/service";
+import { useSession } from "@/lib/staff/session";
 
 const ONGLETS = [
   { href: "/salle", libelle: "Commandes", icone: "list" as const },
@@ -17,7 +16,10 @@ const ONGLETS = [
 export function BarreSalle() {
   const chemin = usePathname();
   const heure = useHorloge();
-  const enLigne = useEnLigne();
+  const navigateur = useEnLigne();
+  const { erreurReseau } = useService();
+  const utilisateur = useSession();
+  const enLigne = navigateur && !erreurReseau;
 
   return (
     <header className="flex h-[68px] shrink-0 items-center gap-4 bg-vert px-4 text-creme md:gap-7 md:px-6">
@@ -48,17 +50,25 @@ export function BarreSalle() {
       <div className="ml-auto flex items-center gap-5 text-sm">
         <span className="hidden items-center gap-2 lg:flex">
           <span className={cx("size-2 rounded-full", enLigne ? "bg-en-ligne" : "bg-attention-fond")} />
-          {enLigne ? "En ligne · actualisé toutes les 5 s" : "Hors ligne"}
+          {enLigne ? "En ligne · actualisé toutes les 5 s" : (erreurReseau ?? "Hors ligne")}
         </span>
         <span className="tabular font-bold">{heure}</span>
         <span className="flex items-center gap-2.5">
           <span className="flex size-9 items-center justify-center rounded-full bg-creme text-[13px] font-bold text-vert">
-            {SERVEUR_DEMO.initiales}
+            {utilisateur.initiales}
           </span>
           <span className="hidden flex-col leading-tight md:flex">
-            <span className="font-bold">{SERVEUR_DEMO.nom}</span>
-            <span className="text-xs opacity-75">{SERVEUR_DEMO.role}</span>
+            <span className="font-bold">{utilisateur.nom}</span>
+            <span className="text-xs opacity-75">{utilisateur.role}</span>
           </span>
+          <button
+            type="button"
+            onClick={() => void utilisateur.seDeconnecter()}
+            aria-label="Se déconnecter"
+            className="cursor-pointer rounded-lg p-1.5 opacity-75 hover:bg-creme/10 hover:opacity-100"
+          >
+            <Icon name="logout" className="size-[18px]" />
+          </button>
         </span>
       </div>
     </header>

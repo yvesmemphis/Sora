@@ -24,7 +24,9 @@ export function FormulaireConnexion() {
     setEnvoi(true);
     try {
       const profil = await connexion(email.trim(), motDePasse);
-      router.push(ACCUEIL_PAR_ROLE[profil.role] ?? "/");
+      // Retour à la page demandée avant la connexion, si elle est interne.
+      const suite = new URLSearchParams(window.location.search).get("suite");
+      router.push(suite && suite.startsWith("/") && !suite.startsWith("//") ? suite : (ACCUEIL_PAR_ROLE[profil.role] ?? "/"));
     } catch (err) {
       if (err instanceof ApiError) {
         setErreur(

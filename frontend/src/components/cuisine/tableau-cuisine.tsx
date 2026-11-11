@@ -3,17 +3,16 @@
 import { useState } from "react";
 import { Icon, type NomIcone } from "@/components/ui/icon";
 import { LogoMark, cx } from "@/components/ui/primitives";
+import { numeroCourt } from "@/lib/api/conversions";
 import { formatMinuteur } from "@/lib/format";
-import { useEnLigne, useHorloge, useTic } from "@/lib/hooks";
+import { useEnLigne, useHorloge, useMaintenant, useTic } from "@/lib/hooks";
 import { MODES_SERVICE } from "@/lib/statuts";
 import { useService } from "@/lib/staff/service";
+import { useSession } from "@/lib/staff/session";
 import type { Commande, StatutCommande } from "@/lib/types";
 import { MenuActionsCuisine } from "./menu-actions";
 import { ModaleIndisponibilite } from "./modale-indisponibilite";
 import { TicketSecours } from "./ticket-secours";
-
-/** Cuisinier de démonstration ; viendra de `/auth/me/`. */
-const CUISINIER = "Koffi";
 
 /** Au-delà de ce temps de préparation, la commande est signalée en retard. */
 const SEUIL_RETARD_SEC = 15 * 60;
@@ -31,10 +30,14 @@ const COLONNES: {
 
 /** K1 · Tableau en 3 colonnes ; K2 · coupure réseau et indisponibilité. */
 export function TableauCuisine() {
-  const { commandes, changerStatut } = useService();
+  const { commandes, changerStatut, erreurReseau, chargement } = useService();
+  const utilisateur = useSession();
   const tic = useTic();
   const heure = useHorloge();
-  const enLigne = useEnLigne();
+  const navigateur = useEnLigne();
+  const enLigne = navigateur && !erreurReseau;
+  const maintenant = useMaintenant();
+  const ecouleDepuis = (iso?: string) => (iso && maintenant ? Math.max(0, (maintenant - new Date(iso).getTime()) / 1000) : 0);
   const [son, setSon] = useState(true);
   const [remises, setRemises] = useState<string[]>([]);
   const [retards, setRetards] = useState<string[]>([]);
@@ -49,8 +52,9 @@ export function TableauCuisine() {
   const visibles = commandes.filter((c) => !remises.includes(c.numero));
 
   function agir(c: Commande) {
-    if (c.statut === "confirmee") changerStatut(c.numero, "preparation", `Cuisine · ${CUISINIER}`);
-    else if (c.statut === "preparation") changerStatut(c.numero, "prete", `Cuisine · ${CUISINIER}`);
+    const note = `Cuisine · ${utilisateur.nom}`;
+    if (c.statut === "confirmee") void changerStatut(c.numero, "preparation", note);
+    else if (c.statut === "preparation") void changerStatut(c.numero, "prete", note);
     else if (c.statut === "prete") setRemises((r) => [...r, c.numero]);
   }
 
@@ -105,10 +109,10 @@ export function TableauCuisine() {
               </div>
               <ul className="flex min-h-0 flex-col gap-3.5 overflow-y-auto pb-2">
                 {cartes.map((c) => {
-                  const ecoule = (c.ecouleSec ?? 0) + tic;
+                  const ecoule = ecouleDepuis(c.majLe);
                   const enRetard =
                     col.statut === "preparation" && (c.enRetard || retards.includes(c.numero) || ecoule > SEUIL_RETARD_SEC);
-                  const nouvelle = col.statut === "confirmee" && c.nouvelle;
+                  const nouvelle = col.statut === "confirmee" && ecoule < 120;
                   const [pLib, pFond, pIcone] = enRetard
                     ? ["En retard", "bg-[#F2C4AE]", "alert" as NomIcone]
                     : nouvelle
@@ -125,10 +129,12 @@ export function TableauCuisine() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex flex-col gap-1">
-                          <span className="tabular text-5xl leading-[52px] font-bold">{c.numero}</span>
+                          <span className="tabular text-5xl leading-[52px] font-bold" title={`N° ${c.numero}`}>
+                            {numeroCourt(c.numero)}
+                          </span>
                           <span className="flex items-center gap-2 text-lg text-[#D9E0DB]">
                             <Icon name={mode.icone} className="size-5 text-or" />
-                            {mode.long(c.emplacement).replace(", chambre", "")}
+                            {c.emplacement === "—" ? mode.libelle : mode.long(c.emplacement).replace(", chambre", "")}
                           </span>
                         </div>
                         <div className="flex flex-col items-end gap-2">
@@ -174,7 +180,9 @@ export function TableauCuisine() {
                   );
                 })}
                 {cartes.length === 0 ? (
-                  <li className="rounded-2xl border border-dashed border-creme/15 p-6 text-center text-base text-creme/50">Aucune commande</li>
+                  <li className="rounded-2xl border border-dashed border-creme/15 p-6 text-center text-base text-creme/50">
+                    {chargement ? "Chargement…" : "Aucune commande"}
+                  </li>
                 ) : null}
               </ul>
             </section>

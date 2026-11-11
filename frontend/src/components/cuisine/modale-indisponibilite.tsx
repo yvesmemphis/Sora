@@ -21,6 +21,7 @@ export function ModaleIndisponibilite({
   const { commandes, signalerIndisponibilite } = useService();
   const [platId, setPlatId] = useState(commande.lignes[0]?.platId ?? "");
   const [choix, setChoix] = useState<Exclude<Disponibilite, "disponible">>("temporaire");
+  const [envoi, setEnvoi] = useState(false);
   const plat = commande.lignes.find((l) => l.platId === platId);
 
   const concernees = commandes.filter(
@@ -102,9 +103,12 @@ export function ModaleIndisponibilite({
           </button>
           <button
             type="button"
-            onClick={() => {
-              signalerIndisponibilite(platId, choix);
-              onFermer();
+            disabled={envoi || !platId}
+            onClick={async () => {
+              setEnvoi(true);
+              const ok = await signalerIndisponibilite(platId, choix);
+              setEnvoi(false);
+              if (ok) onFermer();
             }}
             className="flex h-16 cursor-pointer items-center justify-center gap-2.5 rounded-xl bg-vert text-xl font-bold text-creme"
           >
@@ -113,7 +117,7 @@ export function ModaleIndisponibilite({
           </button>
         </div>
         {horsLigne ? (
-          <span className="text-[15px] text-texte-3">Hors ligne : le signalement sera envoyé dès le retour de la connexion.</span>
+          <span className="text-[15px] text-texte-3">Hors ligne : réessayez dès le retour de la connexion.</span>
         ) : null}
       </div>
     </Modale>

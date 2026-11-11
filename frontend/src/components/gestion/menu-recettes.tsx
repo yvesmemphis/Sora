@@ -1,11 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { EntetePage, LigneTableau, Tableau } from "@/components/espace/barre-laterale";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Bouton, cx } from "@/components/ui/primitives";
-import { RECETTES } from "@/lib/demo/gestion";
-import { CATEGORIES, PLATS } from "@/lib/demo/menu";
+import { messageErreur } from "@/lib/api/client";
+import { montant } from "@/lib/api/conversions";
+import { listerIngredients, recetteActive, type IngredientApi, type RecetteApi } from "@/lib/api/gestion";
+import {
+  changerDisponibilite,
+  creerPlat,
+  listerCategories,
+  listerPlats,
+  modifierPlat,
+  platDepuisApi,
+  type CategorieApi,
+} from "@/lib/api/menu";
 import { formatFCFA, formatNombre, lireMontant } from "@/lib/format";
 import { DISPONIBILITES } from "@/lib/statuts";
 import type { Categorie, Disponibilite, Plat } from "@/lib/types";
@@ -20,11 +30,51 @@ const LIBELLES_DISPO: Record<Disponibilite, string> = {
 
 /** G2 · Menu et recettes. */
 export function MenuRecettes() {
-  const [plats, setPlats] = useState<Plat[]>(PLATS);
+  const [plats, setPlats] = useState<Plat[]>([]);
+  const [categoriesApi, setCategoriesApi] = useState<CategorieApi[]>([]);
+  const [ingredients, setIngredients] = useState<IngredientApi[]>([]);
   const [categorie, setCategorie] = useState<Categorie | "Toutes">("Toutes");
   const [recherche, setRecherche] = useState("");
-  const [selection, setSelection] = useState<string | null>("PLAT-010");
-  const [brouillon, setBrouillon] = useState<Plat | null>(() => PLATS.find((p) => p.id === "PLAT-010") ?? null);
+  const [selection, setSelection] = useState<string | null>(null);
+  const [brouillon, setBrouillon] = useState<Plat | null>(null);
+  const [recette, setRecette] = useState<RecetteApi | null>(null);
+  const [erreur, setErreur] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
+  const [chargement, setChargement] = useState(true);
+  const CATEGORIES = categoriesApi.map((c) => c.name);
+
+  const charger = useCallback(async () => {
+    try {
+      const [cats, liste] = await Promise.all([listerCategories(), listerPlats()]);
+      setCategoriesApi(cats.sort((a, b) => a.position - b.position));
+      setPlats(liste.map((d) => platDepuisApi(d, cats)));
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setChargement(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement depuis l'API
+    void charger();
+    listerIngredients()
+      .then(setIngredients)
+      .catch(() => undefined);
+  }, [charger]);
+
+  // Recette active du plat sélectionné.
+  useEffect(() => {
+    if (!selection) return;
+    let actif = true;
+    recetteActive(selection)
+      .then((r) => actif && setRecette(r))
+      .catch(() => actif && setRecette(null));
+    return () => {
+      actif = false;
+    };
+  }, [selection]);
 
   const visibles = useMemo(() => {
     const q = recherche.trim().toLowerCase();
@@ -34,44 +84,74 @@ export function MenuRecettes() {
   }, [plats, categorie, recherche]);
 
   function ouvrir(p: Plat) {
+    setRecette(null);
     setSelection(p.id);
     setBrouillon({ ...p });
   }
 
   function nouveau() {
-    const id = `PLAT-${String(100 + plats.length).padStart(3, "0")}`;
-    setSelection(id);
+    setRecette(null);
+    setSelection(null);
+    const cat = categoriesApi.find((c) => c.name === categorie) ?? categoriesApi.find((c) => c.is_active);
     setBrouillon({
-      id,
-      slug: id.toLowerCase(),
+      id: "",
+      slug: "",
       nom: "",
       description: "",
-      categorie: categorie === "Toutes" ? "Plats" : categorie,
+      categorie: cat?.name ?? "",
+      categorieId: cat?.id,
       prix: 0,
       preparationMin: 10,
       disponibilite: "disponible",
       allergenes: [],
-      versionRecette: "v1",
     });
   }
 
-  function enregistrer() {
-    if (!brouillon || !brouillon.nom.trim()) return;
-    setPlats((prev) =>
-      prev.some((p) => p.id === brouillon.id) ? prev.map((p) => (p.id === brouillon.id ? brouillon : p)) : [...prev, brouillon],
-    );
+  async function enregistrer() {
+    if (!brouillon || !brouillon.nom.trim() || envoi) return;
+    setEnvoi(true);
+    setErreur(null);
+    try {
+      const champs = {
+        name: brouillon.nom.trim(),
+        description: brouillon.description,
+        price: brouillon.prix.toFixed(2),
+        preparation_time: brouillon.preparationMin,
+        ...(brouillon.categorieId ? { category: brouillon.categorieId } : {}),
+      };
+      let maj = brouillon.id
+        ? await modifierPlat(brouillon.id, champs)
+        : await creerPlat({ ...champs, category: brouillon.categorieId ?? "" });
+      const disponible = brouillon.disponibilite === "disponible";
+      if (maj.is_available !== disponible) maj = await changerDisponibilite(maj.id, disponible);
+      const plat = platDepuisApi(maj, categoriesApi);
+      // L'API ne distingue pas « temporaire » et « épuisé » : on garde le choix affiché.
+      if (!disponible) plat.disponibilite = brouillon.disponibilite;
+      setPlats((prev) => (prev.some((p) => p.id === plat.id) ? prev.map((p) => (p.id === plat.id ? plat : p)) : [...prev, plat]));
+      setSelection(plat.id);
+      setBrouillon({ ...plat });
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setEnvoi(false);
+    }
   }
 
-  const recette = brouillon ? RECETTES[brouillon.id] : undefined;
-  const coutMatiere = recette?.reduce((s, r) => s + r.cout, 0) ?? 0;
-  const estNouveau = brouillon && !plats.some((p) => p.id === brouillon.id);
+  const coutUnitaire = (id: number | string) => montant(ingredients.find((i) => String(i.id) === String(id))?.cost_per_unit);
+  const lignesRecette = (brouillon?.id && recette?.menu_item_id === brouillon.id ? recette.items : []).map((r) => ({
+    ingredient: r.ingredient_name,
+    quantite: `${montant(r.quantity_required).toLocaleString("fr-FR", { maximumFractionDigits: 3 })} ${r.ingredient_unit}`,
+    cout: montant(r.quantity_required) * coutUnitaire(r.ingredient),
+  }));
+  const coutMatiere = lignesRecette.reduce((s, r) => s + r.cout, 0);
+  const estNouveau = brouillon && !brouillon.id;
 
   return (
     <div className="-mx-4 -my-6 grid min-h-[calc(100dvh-64px)] grid-cols-1 md:-mx-8 md:-my-7 lg:min-h-dvh xl:grid-cols-[minmax(0,1fr)_460px]">
       <div className="flex min-w-0 flex-col gap-[18px] px-4 py-6 md:px-8 md:py-7">
         <EntetePage
           titre="Menu et recettes"
-          sousTitre={`${plats.length} plats · ${CATEGORIES.length} catégories`}
+          sousTitre={chargement ? "Chargement…" : `${plats.length} plats · ${CATEGORIES.length} catégories`}
           actions={
             <Bouton icone="plus" onClick={nouveau}>
               Nouveau plat
@@ -104,7 +184,12 @@ export function MenuRecettes() {
             </select>
           </label>
         </div>
-        <Tableau colonnes={COLONNES} entetes={["PLAT", "PRIX", "PRÉP.", "DISPONIBILITÉ", "RECETTE"]} largeurMin={640}>
+        {erreur ? (
+          <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
+            {erreur}
+          </div>
+        ) : null}
+        <Tableau colonnes={COLONNES} entetes={["PLAT", "PRIX", "PRÉP.", "DISPONIBILITÉ", "MENU"]} largeurMin={640}>
           {visibles.map((p) => (
             <LigneTableau key={p.id} colonnes={COLONNES} onClick={() => ouvrir(p)} selectionnee={p.id === selection}>
               <div className="flex items-center gap-3">
@@ -115,14 +200,14 @@ export function MenuRecettes() {
                 </div>
               </div>
               <span className="tabular font-medium whitespace-nowrap">{formatFCFA(p.prix)}</span>
-              <span className="tabular">{p.preparationMin} min</span>
+              <span className="tabular">{p.preparationMin ? `${p.preparationMin} min` : "—"}</span>
               <span className="flex">
                 <Badge
                   apparence={DISPONIBILITES[p.disponibilite]}
                   libelle={p.disponibilite === "temporaire" ? "Indisponible" : LIBELLES_DISPO[p.disponibilite]}
                 />
               </span>
-              <span className="text-[13px] text-texte-2">{p.versionRecette ?? "—"}</span>
+              <span className="text-[13px] text-texte-2">{p.publie === false ? "Masqué" : "Publié"}</span>
             </LigneTableau>
           ))}
         </Tableau>
@@ -159,8 +244,25 @@ export function MenuRecettes() {
                 aria-label="Nom du plat"
                 className="rounded-lg bg-transparent font-serif text-2xl font-semibold text-vert outline-none focus:bg-creme"
               />
+              <select
+                value={brouillon.categorieId ?? ""}
+                aria-label="Catégorie"
+                onChange={(e) => {
+                  const cat = categoriesApi.find((c) => c.id === e.target.value);
+                  setBrouillon({ ...brouillon, categorieId: cat?.id, categorie: cat?.name ?? "" });
+                }}
+                className="cursor-pointer self-start bg-transparent text-[13px] text-texte-3 outline-none"
+              >
+                {categoriesApi
+                  .filter((c) => c.is_active)
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+              </select>
               <span className="text-[13px] text-texte-3">
-                {brouillon.categorie} · {brouillon.disponibilite === "disponible" ? "actif sur le menu" : "masqué du menu client"}
+                {brouillon.disponibilite === "disponible" ? "actif sur le menu" : "masqué du menu client"}
               </span>
             </div>
           </div>
@@ -178,8 +280,8 @@ export function MenuRecettes() {
               <span className="text-[13px] font-medium">Temps de préparation (min)</span>
               <input
                 inputMode="numeric"
-                value={brouillon.preparationMin}
-                onChange={(e) => setBrouillon({ ...brouillon, preparationMin: lireMontant(e.target.value) })}
+                value={brouillon.preparationMin ?? ""}
+                onChange={(e) => setBrouillon({ ...brouillon, preparationMin: e.target.value ? lireMontant(e.target.value) : null })}
                 className="tabular h-12 rounded-xl border border-bordure-2 px-3.5 text-base outline-none focus:border-vert"
               />
             </label>
@@ -211,12 +313,16 @@ export function MenuRecettes() {
           </div>
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-[15px] font-bold">Recette · version {brouillon.versionRecette?.replace("v", "") ?? "1"}</span>
-              {recette ? <span className="text-xs text-texte-3">depuis le 12/10/2026 · v2 archivée</span> : null}
+              <span className="text-[15px] font-bold">
+                Recette{lignesRecette.length && recette ? ` · version ${recette.version_number}` : ""}
+              </span>
+              {lignesRecette.length && recette?.valid_from ? (
+                <span className="text-xs text-texte-3">depuis le {new Date(recette.valid_from).toLocaleDateString("fr-FR")}</span>
+              ) : null}
             </div>
-            {recette ? (
+            {lignesRecette.length ? (
               <div className="overflow-hidden rounded-xl border border-ligne">
-                {recette.map((r) => (
+                {lignesRecette.map((r) => (
                   <div key={r.ingredient} className="tabular grid grid-cols-[1fr_90px_90px] border-b border-ligne-3 px-3.5 py-[9px] text-[13px]">
                     <span>{r.ingredient}</span>
                     <span className="text-right font-bold">{r.quantite}</span>
@@ -230,11 +336,9 @@ export function MenuRecettes() {
               </div>
             ) : (
               <div className="rounded-xl border border-dashed border-bordure p-4 text-center text-[13px] text-texte-3">
-                Aucune fiche recette détaillée pour ce plat.
+                Aucune recette active pour ce plat.
                 <br />
-                <button type="button" className="mt-2 cursor-pointer font-bold text-vert underline">
-                  Ajouter des ingrédients
-                </button>
+                <span className="text-xs">La saisie des recettes (POST /recipe-versions/publish/) reste à câbler.</span>
               </div>
             )}
             <span className="text-xs text-texte-3">
@@ -248,12 +352,13 @@ export function MenuRecettes() {
               onClick={() => {
                 const original = plats.find((p) => p.id === brouillon.id);
                 setBrouillon(original ? { ...original } : null);
+                if (!original) setSelection(null);
               }}
             >
               Annuler
             </Bouton>
-            <Bouton hauteur="lg" onClick={enregistrer} disabled={!brouillon.nom.trim() || !brouillon.prix}>
-              Enregistrer
+            <Bouton hauteur="lg" onClick={enregistrer} disabled={!brouillon.nom.trim() || !brouillon.prix || !brouillon.categorieId || envoi}>
+              {envoi ? "Enregistrement…" : "Enregistrer"}
             </Bouton>
           </div>
         </aside>

@@ -1,44 +1,101 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { EntetePage } from "@/components/espace/barre-laterale";
 import { Icon, type NomIcone } from "@/components/ui/icon";
 import { Bouton, Carte, Puce, cx } from "@/components/ui/primitives";
-import { MOTIFS_PERTES, RECOMMANDATIONS, type StatutReco } from "@/lib/demo/gestion";
+import { messageErreur } from "@/lib/api/client";
+import { montant } from "@/lib/api/conversions";
+import { deciderPrevision, listerInvendus, listerPrevisions, type InvenduApi, type PrevisionApi } from "@/lib/api/gestion";
 
-const TYPES: Record<(typeof RECOMMANDATIONS)[number]["type"], { libelle: string; icone: NomIcone; ton: string; texte: string }> = {
-  augmenter: { libelle: "AUGMENTER LA PRODUCTION", icone: "trend", ton: "bg-servi-fond text-vert", texte: "text-vert" },
-  reduire: { libelle: "RÉDUIRE LA PRODUCTION", icone: "flame", ton: "bg-terracotta-fond text-terracotta", texte: "text-terracotta" },
-  approvisionner: { libelle: "APPROVISIONNEMENT", icone: "box", ton: "bg-attention-fond-2 text-attention", texte: "text-attention" },
-};
+type StatutReco = "a_valider" | "validee" | "ignoree";
+
+const STATUT_RECO: Record<PrevisionApi["status"], StatutReco> = { DRAFT: "a_valider", APPROVED: "validee", REJECTED: "ignoree" };
+
+const TYPE = { libelle: "PRÉVISION DE PRODUCTION", icone: "trend" as NomIcone, ton: "bg-servi-fond text-vert", texte: "text-vert" };
+
+const COULEURS_MOTIFS = ["#A3481F", "#1F3D36", "#7A5200", "#5C574E", "#8C857A", "#2F6B3A"];
+
+function periodeLisible(p: PrevisionApi): string {
+  const f = (d: string) => new Date(d).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  return p.period_start === p.period_end ? f(p.period_start) : `du ${f(p.period_start)} au ${f(p.period_end)}`;
+}
+
+function explication(e: Record<string, unknown>): string {
+  const morceaux: string[] = [];
+  const histo = e.history ?? e.historique;
+  if (Array.isArray(histo)) morceaux.push(`${histo.length} jours d'historique`);
+  for (const [cle, v] of Object.entries(e)) {
+    if (cle === "history" || cle === "historique" || typeof v === "object") continue;
+    morceaux.push(`${cle.replace(/_/g, " ")} : ${String(v)}`);
+  }
+  return morceaux.slice(0, 4).join(" · ");
+}
 
 const niveau = (c: number) => (c >= 70 ? "Bonne" : c >= 55 ? "Moyenne" : "Faible");
 
 /** G5 · Prévisions et recommandations IA, toujours soumises à validation. */
 export function Previsions() {
-  const [recos, setRecos] = useState(RECOMMANDATIONS);
+  const [previsions, setPrevisions] = useState<PrevisionApi[]>([]);
+  const [invendus, setInvendus] = useState<InvenduApi[]>([]);
   const [onglet, setOnglet] = useState<StatutReco>("a_valider");
-  const [ajustement, setAjustement] = useState<string | null>(null);
-  const comptes = { a_valider: 0, validee: 12, ignoree: 4 };
-  recos.forEach((r) => {
-    if (r.statut === "a_valider") comptes.a_valider += 1;
-    else comptes[r.statut] += 1;
-  });
-  const changer = (id: string, statut: StatutReco) => setRecos((prev) => prev.map((r) => (r.id === id ? { ...r, statut } : r)));
+  const [etat, setEtat] = useState<string | null>("Chargement…");
+  const [erreur, setErreur] = useState<string | null>(null);
+
+  useEffect(() => {
+    listerPrevisions()
+      .then((p) => {
+        setPrevisions(p);
+        setEtat(null);
+      })
+      .catch((e: unknown) => setEtat(messageErreur(e)));
+    listerInvendus()
+      .then(setInvendus)
+      .catch(() => undefined);
+  }, []);
+
+  const recos = previsions.map((p) => ({ ...p, statut: STATUT_RECO[p.status], confiance: Math.round(montant(p.confidence) * 100) }));
+  const comptes = { a_valider: 0, validee: 0, ignoree: 0 };
+  recos.forEach((r) => (comptes[r.statut] += 1));
   const visibles = recos.filter((r) => r.statut === onglet);
-  const maxPerte = Math.max(...MOTIFS_PERTES.map((m) => m.part));
+
+  async function changer(id: number, decision: "approve" | "reject") {
+    try {
+      const maj = await deciderPrevision(id, decision, decision === "reject" ? "Ignorée par le gestionnaire" : "");
+      setPrevisions((prev) => prev.map((x) => (x.id === maj.id ? maj : x)));
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    }
+  }
+
+  // Motifs de pertes : quantités jetées par motif, sur 4 semaines.
+  const motifsPertes = useMemo(() => {
+    const depuis = new Date().getTime() - 28 * 86_400_000;
+    const parMotif = new Map<string, number>();
+    for (const w of invendus) {
+      if (new Date(w.declared_at).getTime() < depuis) continue;
+      parMotif.set(w.reason, (parMotif.get(w.reason) ?? 0) + montant(w.remaining_quantity));
+    }
+    const total = [...parMotif.values()].reduce((s, v) => s + v, 0);
+    return [...parMotif.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([motif, q], i) => ({ motif, part: total ? Math.round((q / total) * 100) : 0, couleur: COULEURS_MOTIFS[i] }));
+  }, [invendus]);
+  const maxPerte = Math.max(1, ...motifsPertes.map((m) => m.part));
 
   return (
     <>
       <EntetePage
         titre="Prévisions et recommandations"
-        sousTitre="Semaine du 9 au 15 novembre · modèle « moyennes et saisonnalité » v1 · généré à 6 h 00"
-        actions={
-          <Bouton variante="contour" icone="refresh">
-            Recalculer
-          </Bouton>
-        }
+        sousTitre="Générées côté serveur (commande « generate_forecasts »), toujours soumises à validation."
       />
+      {erreur ? (
+        <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
+          {erreur}
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-3.5 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-wrap gap-1.5">
@@ -53,7 +110,7 @@ export function Previsions() {
             </Puce>
           </div>
           {visibles.map((r) => {
-            const t = TYPES[r.type];
+            const t = TYPE;
             return (
               <Carte key={r.id} className="grid grid-cols-[44px_minmax(0,1fr)] items-start gap-4 px-5 py-[18px] md:grid-cols-[44px_minmax(0,1fr)_210px]">
                 <span className={cx("flex size-11 items-center justify-center rounded-xl", t.ton)}>
@@ -62,10 +119,15 @@ export function Previsions() {
                 <div className="flex min-w-0 flex-col gap-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={cx("text-xs font-bold tracking-[.1em]", t.texte)}>{t.libelle}</span>
-                    <span className="rounded-full border border-[#C9BFAE] px-2 py-0.5 text-[11px] font-bold text-texte-3">{r.etiquette}</span>
+                    <span className="rounded-full border border-[#C9BFAE] px-2 py-0.5 text-[11px] font-bold text-texte-3">v{r.version}</span>
                   </div>
-                  <span className="text-[17px] leading-[23px] font-bold">{r.titre}</span>
-                  <span className="text-[13px] leading-[19px] text-texte-2">{r.detail}</span>
+                  <span className="text-[17px] leading-[23px] font-bold">
+                    {periodeLisible(r)} : préparer {Math.round(montant(r.predicted_quantity))} portions de {r.menu_item_name.toLowerCase()}.
+                  </span>
+                  <span className="text-[13px] leading-[19px] text-texte-2">
+                    {explication(r.explanation)}
+                    {r.rejection_reason ? ` · Motif : ${r.rejection_reason}` : ""}
+                  </span>
                   <div className="mt-1 flex items-center gap-2.5">
                     <span className="w-[72px] text-xs text-texte-3">Confiance</span>
                     <div className="h-1.5 max-w-[200px] flex-1 rounded-[3px] bg-ligne-3">
@@ -73,29 +135,15 @@ export function Previsions() {
                     </div>
                     <span className="text-xs font-bold">{niveau(r.confiance)}</span>
                   </div>
-                  {ajustement === r.id ? (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-sable p-3 text-sm">
-                      <span>Quantité retenue :</span>
-                      <input defaultValue={r.titre.match(/\d+(?= (portions|poissons|kg))/)?.[0] ?? ""} inputMode="numeric" className="h-10 w-20 rounded-lg border-[1.5px] border-vert bg-papier px-2.5 font-bold outline-none" />
-                      <Bouton hauteur="sm" onClick={() => { changer(r.id, "validee"); setAjustement(null); }}>
-                        Valider l&apos;ajustement
-                      </Bouton>
-                    </div>
-                  ) : null}
                 </div>
                 {r.statut === "a_valider" ? (
                   <div className="col-span-2 flex flex-col gap-2 md:col-span-1">
-                    <Bouton icone="check" onClick={() => changer(r.id, "validee")}>
+                    <Bouton icone="check" onClick={() => void changer(r.id, "approve")}>
                       Valider
                     </Bouton>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Bouton variante="fantome" hauteur="sm" className="border-bordure-2" onClick={() => setAjustement(r.id)}>
-                        Ajuster
-                      </Bouton>
-                      <Bouton variante="fantome" hauteur="sm" className="border-bordure-2 text-texte-2" onClick={() => changer(r.id, "ignoree")}>
-                        Ignorer
-                      </Bouton>
-                    </div>
+                    <Bouton variante="fantome" hauteur="sm" className="border-bordure-2 text-texte-2" onClick={() => void changer(r.id, "reject")}>
+                      Ignorer
+                    </Bouton>
                   </div>
                 ) : (
                   <div className="col-span-2 flex flex-col items-start gap-2 md:col-span-1 md:items-end">
@@ -103,9 +151,6 @@ export function Previsions() {
                       <Icon name={r.statut === "validee" ? "check" : "x"} className="size-4" />
                       {r.statut === "validee" ? "Validée" : "Ignorée"}
                     </span>
-                    <button type="button" onClick={() => changer(r.id, "a_valider")} className="cursor-pointer text-xs text-vert underline">
-                      Remettre à valider
-                    </button>
                   </div>
                 )}
               </Carte>
@@ -113,18 +158,9 @@ export function Previsions() {
           })}
           {visibles.length === 0 ? (
             <p className="rounded-2xl border border-dashed border-bordure p-6 text-center text-sm text-texte-3">
-              {onglet === "a_valider" ? "Toutes les recommandations ont été traitées." : "Les recommandations plus anciennes apparaîtront ici une fois l'API branchée."}
+              {etat ?? (onglet === "a_valider" ? "Aucune prévision à valider." : "Aucune prévision dans cet onglet.")}
             </p>
           ) : null}
-          <div className="flex items-center gap-3.5 rounded-2xl border-[1.5px] border-dashed border-[#C9BFAE] px-5 py-4">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-segment text-texte-3">
-              <Icon name="info" className="size-[22px]" />
-            </span>
-            <div className="flex flex-col gap-0.5">
-              <span className="text-[15px] font-bold">Brochettes de capitaine · Données insuffisantes</span>
-              <span className="text-[13px] text-texte-2">Plat ajouté il y a 9 jours. Une prévision sera proposée après 4 semaines de ventes.</span>
-            </div>
-          </div>
         </div>
 
         <div className="flex flex-col gap-3.5">
@@ -133,7 +169,8 @@ export function Previsions() {
               <h2 className="m-0 text-[15px] font-bold">Motifs de pertes · 4 semaines</h2>
               <span className="text-xs text-texte-3">déclarés</span>
             </div>
-            {MOTIFS_PERTES.map((m) => (
+            {motifsPertes.length === 0 ? <span className="text-[13px] text-texte-3">Aucun invendu déclaré.</span> : null}
+            {motifsPertes.map((m) => (
               <div key={m.motif} className="grid grid-cols-[130px_1fr_40px] items-center gap-2.5 text-[13px]">
                 <span>{m.motif}</span>
                 <div className="h-2.5 rounded-[5px] bg-ligne-3">
@@ -147,6 +184,7 @@ export function Previsions() {
             <span className="flex items-center gap-2 text-[13px] font-bold text-or">
               <Icon name="spark" className="size-[18px]" />
               RAPPORT DE LA SEMAINE
+              <span className="rounded-md bg-creme/15 px-2 py-0.5 text-[11px] text-creme">Exemple · pas encore d&apos;API</span>
             </span>
             <span className="font-serif text-xl leading-[26px] font-semibold">
               Le samedi soir concentre 21 % des ventes ; le mardi midi reste le service le plus faible.

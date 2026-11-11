@@ -4,12 +4,11 @@ import { useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Modale } from "@/components/ui/modale";
 import { Bouton, Puce } from "@/components/ui/primitives";
-import { totalCommande } from "@/lib/demo/commandes";
 import { formatFCFA } from "@/lib/format";
 import { MODES_SERVICE } from "@/lib/statuts";
 import { MOTIFS_ANNULATION, useService } from "@/lib/staff/service";
 import type { Commande } from "@/lib/types";
-import { SERVEUR_DEMO } from "./barre-salle";
+import { totalCommande } from "./commandes-service";
 
 /** S3 · Annulation après validation (accord du personnel). */
 export function ModaleAnnulation({
@@ -27,10 +26,16 @@ export function ModaleAnnulation({
   const mode = MODES_SERVICE[commande.mode];
   const resume = commande.lignes.map((l) => `${l.quantite} × ${l.nom}`).join(", ");
 
-  function confirmer() {
-    annuler(commande.numero, motif, commentaire.trim(), SERVEUR_DEMO.nom);
-    setCommentaire("");
-    onFermer();
+  const [envoi, setEnvoi] = useState(false);
+
+  async function confirmer() {
+    setEnvoi(true);
+    const ok = await annuler(commande.numero, motif, commentaire.trim());
+    setEnvoi(false);
+    if (ok) {
+      setCommentaire("");
+      onFermer();
+    }
   }
 
   return (
@@ -87,7 +92,7 @@ export function ModaleAnnulation({
           <Bouton variante="contour" hauteur="xl" onClick={onFermer}>
             Garder la commande
           </Bouton>
-          <Bouton variante="danger" hauteur="xl" onClick={confirmer}>
+          <Bouton variante="danger" hauteur="xl" onClick={confirmer} disabled={envoi}>
             Confirmer l&apos;annulation
           </Bouton>
         </div>

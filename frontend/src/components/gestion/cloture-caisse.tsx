@@ -1,11 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EntetePage } from "@/components/espace/barre-laterale";
 import { Icon, type NomIcone } from "@/components/ui/icon";
 import { Badge, Bouton, Carte, cx } from "@/components/ui/primitives";
-import { CAISSE } from "@/lib/demo/gestion";
+import { messageErreur } from "@/lib/api/client";
+import {
+  commandeDepuisApi,
+  enregistrerPaiement,
+  listerCommandes,
+  listerPaiements,
+  modePaiementDe,
+  type CommandeApi,
+} from "@/lib/api/commandes";
+import { montant } from "@/lib/api/conversions";
+import { listerEmplacements, type EmplacementApi } from "@/lib/api/emplacements";
 import { formatEcart, formatFCFA, formatNombre, lireMontant } from "@/lib/format";
+import { MODES_SERVICE } from "@/lib/statuts";
+
+interface Totaux {
+  especes: { total: number; commandes: number };
+  carte: { total: number; commandes: number };
+  commandesPayees: number;
+}
+
+const estDuJour = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
 
 function BlocCaisse({
   libelle,
@@ -72,10 +91,67 @@ function BlocCaisse({
 
 /** G6 · Clôture de caisse journalière. */
 export function ClotureCaisse() {
-  const [especes, setEspeces] = useState("410 000");
-  const [carte, setCarte] = useState("832 500");
-  const [nonPayees, setNonPayees] = useState(CAISSE.nonPayees);
+  const [especes, setEspeces] = useState("");
+  const [carte, setCarte] = useState("");
+  const [CAISSE, setCaisse] = useState<Totaux>({ especes: { total: 0, commandes: 0 }, carte: { total: 0, commandes: 0 }, commandesPayees: 0 });
+  const [nonPayees, setNonPayees] = useState<{ id: number; numero: string; detail: string; total: number }[]>([]);
   const [cloturee, setCloturee] = useState(false);
+  const [etat, setEtat] = useState<string | null>("Chargement…");
+
+  /**
+   * Le backend n'expose pas encore de liste des paiements par date :
+   * on lit les paiements de chaque commande du jour.
+   */
+  const charger = useCallback(async () => {
+    try {
+      const [liste, emplacements] = await Promise.all([listerCommandes(), listerEmplacements()]);
+      const duJour = liste.filter((c) => estDuJour(c.created_at) && !["CANCELLED", "REJECTED"].includes(c.status));
+      const paiements = await Promise.all(duJour.map((c) => listerPaiements(c.id).then((ps) => ({ c, ps }))));
+      const t: Totaux = { especes: { total: 0, commandes: 0 }, carte: { total: 0, commandes: 0 }, commandesPayees: 0 };
+      const impayees: { c: CommandeApi; e: EmplacementApi[] }[] = [];
+      for (const { c, ps } of paiements) {
+        const ok = ps.filter((x) => x.status === "CONFIRMED");
+        if (ok.length) t.commandesPayees += 1;
+        for (const x of ok) {
+          const bloc = modePaiementDe(x.payment_method) === "carte" ? t.carte : t.especes;
+          bloc.total += montant(x.amount);
+          bloc.commandes += 1;
+        }
+        const paye = ok.reduce((s, x) => s + montant(x.amount), 0);
+        if (c.status === "SERVED" && paye < montant(c.total)) impayees.push({ c, e: emplacements });
+      }
+      setCaisse(t);
+      setNonPayees(
+        impayees.map(({ c, e }) => {
+          const cmd = commandeDepuisApi(c, { emplacements: e });
+          return {
+            id: c.id,
+            numero: cmd.numero,
+            detail: `${MODES_SERVICE[cmd.mode].court(cmd.emplacement)} · passée ${cmd.passeeA}`,
+            total: cmd.total ?? 0,
+          };
+        }),
+      );
+      setEtat(null);
+    } catch (e) {
+      setEtat(messageErreur(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement depuis l'API
+    void charger();
+  }, [charger]);
+
+  async function marquerPayee(id: number, totalCmd: number) {
+    try {
+      await enregistrerPaiement(id, totalCmd, "especes");
+      await charger();
+    } catch (e) {
+      setEtat(messageErreur(e));
+    }
+  }
+
   const total = CAISSE.especes.total + CAISSE.carte.total;
   const ecartTotal = lireMontant(especes) + lireMontant(carte) - total;
 
@@ -83,7 +159,7 @@ export function ClotureCaisse() {
     <>
       <EntetePage
         titre="Clôture de caisse"
-        sousTitre={`${CAISSE.date} · ${CAISSE.commandesPayees} commandes payées · ventes validées uniquement`}
+        sousTitre={`${new Date().toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })} · ${CAISSE.commandesPayees} commandes payées · ventes validées uniquement`}
         actions={
           cloturee ? (
             <Badge apparence={{ libelle: "Journée clôturée", icone: "lock", classes: "text-ok bg-ok-fond" }} taille="md" />
@@ -92,6 +168,11 @@ export function ClotureCaisse() {
           )
         }
       />
+      {etat ? (
+        <div role="status" className={cx("rounded-xl px-4 py-3 text-sm font-bold", etat === "Chargement…" ? "bg-sable text-texte-2" : "bg-danger-fond text-danger")}>
+          {etat}
+        </div>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <BlocCaisse
           libelle="Espèces"
@@ -141,9 +222,9 @@ export function ClotureCaisse() {
                     hauteur="sm"
                     className="border-[1.5px] border-vert"
                     disabled={cloturee}
-                    onClick={() => setNonPayees((p) => p.filter((x) => x.numero !== u.numero))}
+                    onClick={() => void marquerPayee(u.id, u.total)}
                   >
-                    Marquer payée
+                    Marquer payée (espèces)
                   </Bouton>
                 </div>
               ))}
@@ -182,9 +263,9 @@ export function ClotureCaisse() {
           >
             {cloturee ? "Journée clôturée" : "Clôturer la journée"}
           </Bouton>
-          {!cloturee && ecartTotal !== 0 ? (
-            <span className="text-xs text-[#D9E0DB]">L&apos;écart sera enregistré avec la clôture et visible dans le journal.</span>
-          ) : null}
+          <span className="text-xs text-[#D9E0DB]">
+            La clôture n&apos;est pas encore enregistrée côté serveur (aucune API de clôture de caisse).
+          </span>
         </div>
       </div>
     </>

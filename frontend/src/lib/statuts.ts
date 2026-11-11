@@ -17,7 +17,9 @@ export const STATUTS_COMMANDE: Record<StatutCommande, Apparence> = {
   confirmee: { libelle: "Confirmée", icone: "check", classes: "text-vert bg-confirme-fond" },
   preparation: { libelle: "En préparation", icone: "flame", classes: "text-attention bg-attention-fond" },
   prete: { libelle: "Prête", icone: "bag", classes: "text-ok bg-ok-fond" },
+  livraison: { libelle: "En livraison", icone: "truck", classes: "text-vert bg-confirme-fond" },
   servie: { libelle: "Servie / livrée", icone: "truck", classes: "text-vert bg-servi-fond" },
+  cloturee: { libelle: "Clôturée", icone: "lock", classes: "text-ok bg-ok-fond" },
   annulee: { libelle: "Annulée", icone: "x", classes: "text-danger bg-danger-fond" },
   refusee: { libelle: "Refusée", icone: "ban", classes: "text-danger bg-danger-fond" },
 };
@@ -70,5 +72,5 @@ export const COULEUR_HISTORIQUE = {
   payee: "#2F6B3A",
 } as const;
 
-/** Délai de désistement côté client (paramètre administrateur). */
-export const DELAI_DESISTEMENT_SEC = 5 * 60;
+/** Intervalle d'actualisation des écrans du personnel et du suivi client. */
+export const ACTUALISATION_MS = 5000;

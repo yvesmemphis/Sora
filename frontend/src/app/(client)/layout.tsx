@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { MenuProvider } from "@/lib/client/menu";
 import { PanierProvider } from "@/lib/client/panier";
 
 /**
@@ -7,12 +8,14 @@ import { PanierProvider } from "@/lib/client/panier";
  */
 export default function ClientLayout({ children }: { children: ReactNode }) {
   return (
-    <PanierProvider>
+    <MenuProvider>
+      <PanierProvider>
       <div className="flex min-h-dvh justify-center bg-toile">
         <div className="relative flex min-h-dvh w-full max-w-[440px] flex-col bg-creme shadow-[0_0_60px_-30px_rgba(20,35,31,.35)]">
           {children}
         </div>
       </div>
-    </PanierProvider>
+      </PanierProvider>
+    </MenuProvider>
   );
 }

@@ -2,167 +2,307 @@
 
 /**
  * État du service en cours, partagé par les écrans du personnel (salle, cuisine).
- * Données de démonstration en mémoire : à remplacer par l'API `orders`
- * (actualisation toutes les 5 s, puis WebSockets via Django Channels).
+ * Source : API `orders` du backend, actualisée toutes les 5 s. En cuisine, le
+ * WebSocket `ws/kitchen/` déclenche en plus une actualisation immédiate.
  */
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
-import { COMMANDES_SERVICE } from "../demo/commandes";
-import { trouverPlat } from "../demo/menu";
-import { formatHeure } from "../format";
-import { COULEUR_HISTORIQUE } from "../statuts";
-import type { Commande, Disponibilite, EvenementCommande, ModePaiement, ModeService, StatutCommande } from "../types";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  changerStatutCommande,
+  commandeDepuisApi,
+  creerCommande,
+  enregistrerPaiement,
+  listerCommandes,
+  listerPaiements,
+  trouverEmplacement,
+  type CommandeApi,
+} from "../api/commandes";
+import { api, API_URL, messageErreur } from "../api/client";
+import { montant } from "../api/conversions";
+import { listerEmplacements, type EmplacementApi } from "../api/emplacements";
+import { changerDisponibilite, chargerCartePersonnel } from "../api/menu";
+import { ACTUALISATION_MS } from "../statuts";
+import type { Commande, Disponibilite, ModePaiement, ModeService, Plat, StatutCommande } from "../types";
+import { useSession } from "./session";
 
 export const MOTIFS_ANNULATION = ["Demande du client", "Plat indisponible", "Erreur de saisie", "Autre"] as const;
 
+/** Statuts encore « vivants » pendant le service. */
+const ACTIFS: StatutCommande[] = ["recue", "confirmee", "preparation", "prete", "livraison", "servie"];
+
 interface ServiceContexte {
   commandes: Commande[];
+  chargement: boolean;
+  /** Dernière actualisation réussie (ms), 0 si jamais. */
+  actualiseLe: number;
+  erreurReseau: string | null;
   selection: string | null;
   selectionner: (numero: string | null) => void;
-  changerStatut: (numero: string, statut: StatutCommande, acteur: string) => void;
-  marquerPayee: (numero: string, acteur: string) => void;
-  modifierEmplacement: (numero: string, mode: ModeService, emplacement: string) => void;
-  annuler: (numero: string, motif: string, commentaire: string, acteur: string) => void;
-  cloturer: (numero: string) => void;
+  changerStatut: (numero: string, statut: StatutCommande, note?: string) => Promise<boolean>;
+  marquerPayee: (numero: string, mode: ModePaiement) => Promise<boolean>;
+  annuler: (numero: string, motif: string, commentaire: string) => Promise<boolean>;
   creer: (c: {
     mode: ModeService;
     emplacement: string;
     paiement: ModePaiement;
     lignes: { platId: string; quantite: number }[];
     note?: string;
-    acteur: string;
-  }) => Commande;
-  indisponibilites: Record<string, Disponibilite>;
-  signalerIndisponibilite: (platId: string, d: Disponibilite) => void;
+  }) => Promise<Commande | null>;
+  carte: { categories: string[]; plats: Plat[] };
+  emplacements: EmplacementApi[];
+  signalerIndisponibilite: (platId: string, d: Disponibilite) => Promise<boolean>;
+  actualiser: () => Promise<void>;
 }
 
 const Ctx = createContext<ServiceContexte | null>(null);
 
-const LIBELLES: Record<StatutCommande, string> = {
-  recue: "Reçue",
-  confirmee: "Confirmée",
-  preparation: "En préparation",
-  prete: "Prête",
-  servie: "Servie",
-  annulee: "Annulée",
-  refusee: "Refusée",
-};
+const CLE_PAIEMENTS = "sora.modes-paiement";
 
-const COULEURS: Record<StatutCommande, string> = {
-  recue: COULEUR_HISTORIQUE.recue,
-  confirmee: COULEUR_HISTORIQUE.confirmee,
-  preparation: COULEUR_HISTORIQUE.preparation,
-  prete: COULEUR_HISTORIQUE.prete,
-  servie: COULEUR_HISTORIQUE.servie,
-  annulee: "#B3261E",
-  refusee: "#B3261E",
-};
+/** Le backend ne stocke pas le mode de paiement annoncé : on le garde sur l'appareil. */
+function lireModes(): Record<string, ModePaiement> {
+  try {
+    return JSON.parse(window.localStorage.getItem(CLE_PAIEMENTS) ?? "{}") as Record<string, ModePaiement>;
+  } catch {
+    return {};
+  }
+}
 
-function evenement(statut: string, detail: string, couleur: string): EvenementCommande {
-  return { heure: formatHeure(new Date()), statut, detail, couleur };
+function ecrireMode(id: number, mode: ModePaiement) {
+  try {
+    const modes = lireModes();
+    modes[id] = mode;
+    window.localStorage.setItem(CLE_PAIEMENTS, JSON.stringify(modes));
+  } catch {
+    /* stockage indisponible */
+  }
+}
+
+function estDuJour(iso: string): boolean {
+  const d = new Date(iso);
+  const n = new Date();
+  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 }
 
 export function ServiceProvider({ children }: { children: ReactNode }) {
-  const [commandes, setCommandes] = useState<Commande[]>(COMMANDES_SERVICE);
-  const [selection, setSelection] = useState<string | null>(COMMANDES_SERVICE[0]?.numero ?? null);
-  const [clotures, setClotures] = useState<string[]>([]);
-  const [indisponibilites, setIndispo] = useState<Record<string, Disponibilite>>({});
+  const { utilisateur } = useSession();
+  const role = utilisateur.role;
+  const [brutes, setBrutes] = useState<CommandeApi[]>([]);
+  const [emplacements, setEmplacements] = useState<EmplacementApi[]>([]);
+  const [carte, setCarte] = useState<{ categories: string[]; plats: Plat[] }>({ categories: [], plats: [] });
+  const [payees, setPayees] = useState<Record<number, boolean>>({});
+  const [modes, setModes] = useState<Record<string, ModePaiement>>({});
+  const [selection, setSelection] = useState<string | null>(null);
+  const [chargement, setChargement] = useState(true);
+  const [actualiseLe, setActualiseLe] = useState(0);
+  const [erreurReseau, setErreurReseau] = useState<string | null>(null);
+  const [erreurAction, setErreurAction] = useState<string | null>(null);
+  const enCours = useRef(false);
 
-  const maj = useCallback((numero: string, f: (c: Commande) => Commande) => {
-    setCommandes((prev) => prev.map((c) => (c.numero === numero ? f(c) : c)));
+  const actualiser = useCallback(async () => {
+    if (enCours.current) return;
+    enCours.current = true;
+    try {
+      const liste = await listerCommandes();
+      setBrutes(liste);
+      setActualiseLe(Date.now());
+      setErreurReseau(null);
+    } catch (e) {
+      setErreurReseau(messageErreur(e));
+    } finally {
+      enCours.current = false;
+      setChargement(false);
+    }
   }, []);
 
+  const chargerReferentiels = useCallback(async () => {
+    const [locs, menu] = await Promise.allSettled([listerEmplacements(), chargerCartePersonnel()]);
+    if (locs.status === "fulfilled") setEmplacements(locs.value);
+    if (menu.status === "fulfilled") setCarte(menu.value);
+  }, []);
+
+  // Actualisation périodique.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- lecture du stockage du navigateur
+    setModes(lireModes());
+    void actualiser();
+    void chargerReferentiels();
+    const iv = setInterval(() => void actualiser(), ACTUALISATION_MS);
+    const ivRef = setInterval(() => void chargerReferentiels(), 60_000);
+    return () => {
+      clearInterval(iv);
+      clearInterval(ivRef);
+    };
+  }, [actualiser, chargerReferentiels]);
+
+  // Cuisine : WebSocket temps réel (ticket à usage unique, 30 s).
+  useEffect(() => {
+    if (role !== "KITCHEN") return;
+    let ws: WebSocket | null = null;
+    let relance: ReturnType<typeof setTimeout> | undefined;
+    let ferme = false;
+    const ouvrir = async () => {
+      try {
+        const { ticket } = await api<{ ticket: string }>("/kitchen/tickets/", { method: "POST" });
+        if (ferme) return;
+        const base = new URL(API_URL);
+        const proto = base.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${proto}//${base.host}/ws/kitchen/?ticket=${encodeURIComponent(ticket)}`);
+        ws.onmessage = () => void actualiser();
+        ws.onclose = () => {
+          if (!ferme) relance = setTimeout(ouvrir, 10_000);
+        };
+      } catch {
+        if (!ferme) relance = setTimeout(ouvrir, 30_000);
+      }
+    };
+    void ouvrir();
+    return () => {
+      ferme = true;
+      clearTimeout(relance);
+      ws?.close();
+    };
+  }, [role, actualiser]);
+
+  const commandes = useMemo(
+    () =>
+      brutes
+        .map((c) => commandeDepuisApi(c, { emplacements, payee: payees[c.id], paiement: modes[c.id] }))
+        .filter((c) => ACTIFS.includes(c.statut) || (c.creeeLe && estDuJour(c.creeeLe)))
+        .sort((a, b) => (b.creeeLe ?? "").localeCompare(a.creeeLe ?? "")),
+    [brutes, emplacements, payees, modes],
+  );
+
+  const parNumero = useCallback((numero: string) => commandes.find((c) => c.numero === numero), [commandes]);
+
+  // Paiements de la commande sélectionnée (salle et gestion uniquement).
+  const selId = selection ? parNumero(selection)?.id : undefined;
+  useEffect(() => {
+    if (!selId || role === "KITCHEN") return;
+    const total = montant(brutes.find((c) => c.id === selId)?.total);
+    listerPaiements(selId)
+      .then((ps) => {
+        const confirmes = ps.filter((p) => p.status === "CONFIRMED" || p.status === "REFUNDED");
+        // Le serveur ne voit pas les montants : un paiement confirmé vaut paiement en totalité.
+        const paye = confirmes.some((p) => p.amount === undefined) || confirmes.reduce((s, p) => s + montant(p.amount), 0) >= total;
+        setPayees((prev) => ({ ...prev, [selId]: paye }));
+      })
+      .catch(() => undefined);
+  }, [selId, role, brutes]);
+
+  const executer = useCallback(
+    async <T,>(action: () => Promise<T>): Promise<T | null> => {
+      setErreurAction(null);
+      try {
+        const r = await action();
+        void actualiser();
+        return r;
+      } catch (e) {
+        setErreurAction(messageErreur(e));
+        return null;
+      }
+    },
+    [actualiser],
+  );
+
   const changerStatut = useCallback<ServiceContexte["changerStatut"]>(
-    (numero, statut, acteur) =>
-      maj(numero, (c) => ({
-        ...c,
-        statut,
-        nouvelle: false,
-        enRetard: statut === "preparation" ? c.enRetard : false,
-        ecouleSec: statut === "preparation" ? 0 : c.ecouleSec,
-        historique: [evenement(LIBELLES[statut], acteur, COULEURS[statut]), ...c.historique],
-      })),
-    [maj],
+    async (numero, statut, note = "") => {
+      const c = parNumero(numero);
+      if (!c?.id) return false;
+      const id = c.id;
+      return (await executer(() => changerStatutCommande(id, statut, note))) !== null;
+    },
+    [parNumero, executer],
   );
 
   const marquerPayee = useCallback<ServiceContexte["marquerPayee"]>(
-    (numero, acteur) =>
-      maj(numero, (c) => ({
-        ...c,
-        payee: true,
-        historique: [
-          evenement("Payée", `${c.paiement === "carte" ? "Carte" : "Espèces"} · ${acteur}`, COULEUR_HISTORIQUE.payee),
-          ...c.historique,
-        ],
-      })),
-    [maj],
-  );
-
-  const modifierEmplacement = useCallback<ServiceContexte["modifierEmplacement"]>(
-    (numero, mode, emplacement) => maj(numero, (c) => ({ ...c, mode, emplacement })),
-    [maj],
+    async (numero, mode) => {
+      const c = parNumero(numero);
+      if (!c?.id || c.total === undefined) return false;
+      const id = c.id;
+      const total = c.total;
+      const ok = (await executer(() => enregistrerPaiement(id, total, mode))) !== null;
+      if (ok) {
+        setPayees((prev) => ({ ...prev, [id]: true }));
+        ecrireMode(id, mode);
+        setModes((prev) => ({ ...prev, [id]: mode }));
+      }
+      return ok;
+    },
+    [parNumero, executer],
   );
 
   const annuler = useCallback<ServiceContexte["annuler"]>(
-    (numero, motif, commentaire, acteur) =>
-      maj(numero, (c) => ({
-        ...c,
-        statut: "annulee",
-        historique: [
-          evenement("Annulée", `${motif}${commentaire ? ` · ${commentaire}` : ""} · ${acteur}`, "#B3261E"),
-          ...c.historique,
-        ],
-      })),
-    [maj],
+    async (numero, motif, commentaire) => changerStatut(numero, "annulee", [motif, commentaire].filter(Boolean).join(" · ")),
+    [changerStatut],
   );
 
-  const cloturer = useCallback((numero: string) => setClotures((prev) => [...prev, numero]), []);
+  const creer = useCallback<ServiceContexte["creer"]>(
+    async ({ mode, emplacement, paiement, lignes, note }) => {
+      const loc = trouverEmplacement(mode, emplacement, emplacements);
+      if (mode !== "emporter" && !loc) {
+        setErreurAction(`${mode === "table" ? "Table" : "Chambre"} « ${emplacement} » inconnue ou inactive.`);
+        return null;
+      }
+      const cree = await executer(() => creerCommande({ mode, location: loc?.id ?? null, notes: note, lignes }));
+      if (!cree) return null;
+      ecrireMode(cree.id, paiement);
+      setModes((prev) => ({ ...prev, [cree.id]: paiement }));
+      setBrutes((prev) => [cree, ...prev.filter((c) => c.id !== cree.id)]);
+      const commande = commandeDepuisApi(cree, { emplacements, paiement });
+      setSelection(commande.numero);
+      return commande;
+    },
+    [emplacements, executer],
+  );
 
-  const creer = useCallback<ServiceContexte["creer"]>(({ mode, emplacement, paiement, lignes, note, acteur }) => {
-    const numero = String(145 + Math.floor(Math.random() * 800)).padStart(4, "0");
-    const commande: Commande = {
-      numero,
-      statut: "recue",
-      mode,
-      emplacement,
-      paiement,
-      payee: false,
-      passeeA: formatHeure(new Date()),
-      note,
-      ecouleSec: 0,
-      lignes: lignes.flatMap((l) => {
-        const p = trouverPlat(l.platId);
-        return p ? [{ platId: p.id, nom: p.nom, quantite: l.quantite, prixUnitaire: p.prix }] : [];
-      }),
-      historique: [evenement("Reçue", `Serveur · ${acteur}`, COULEUR_HISTORIQUE.recue)],
-    };
-    setCommandes((prev) => [commande, ...prev]);
-    setSelection(numero);
-    return commande;
-  }, []);
-
-  const signalerIndisponibilite = useCallback(
-    (platId: string, d: Disponibilite) => setIndispo((prev) => ({ ...prev, [platId]: d })),
-    [],
+  const signalerIndisponibilite = useCallback<ServiceContexte["signalerIndisponibilite"]>(
+    async (platId, d) => {
+      const ok = (await executer(() => changerDisponibilite(platId, d === "disponible"))) !== null;
+      if (ok) {
+        setCarte((prev) => ({
+          ...prev,
+          plats: prev.plats.map((p) => (p.id === platId ? { ...p, disponibilite: d } : p)),
+        }));
+      }
+      return ok;
+    },
+    [executer],
   );
 
   const valeur = useMemo<ServiceContexte>(
     () => ({
-      commandes: commandes.filter((c) => !clotures.includes(c.numero)),
+      commandes,
+      chargement,
+      actualiseLe,
+      erreurReseau,
       selection,
       selectionner: setSelection,
       changerStatut,
       marquerPayee,
-      modifierEmplacement,
       annuler,
-      cloturer,
       creer,
-      indisponibilites,
+      carte,
+      emplacements,
       signalerIndisponibilite,
+      actualiser,
     }),
-    [commandes, clotures, selection, changerStatut, marquerPayee, modifierEmplacement, annuler, cloturer, creer, indisponibilites, signalerIndisponibilite],
+    [commandes, chargement, actualiseLe, erreurReseau, selection, changerStatut, marquerPayee, annuler, creer, carte, emplacements, signalerIndisponibilite, actualiser],
   );
 
-  return <Ctx.Provider value={valeur}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={valeur}>
+      {children}
+      {erreurAction ? (
+        <div role="alert" className="fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
+          <div className="flex max-w-xl items-center gap-3 rounded-2xl bg-danger px-5 py-3.5 text-[15px] font-bold text-creme shadow-[0_16px_32px_-16px_rgba(0,0,0,.6)]">
+            <span>{erreurAction}</span>
+            <button type="button" onClick={() => setErreurAction(null)} className="ml-2 cursor-pointer rounded-lg px-2 py-1 underline">
+              Fermer
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </Ctx.Provider>
+  );
 }
 
 export function useService(): ServiceContexte {

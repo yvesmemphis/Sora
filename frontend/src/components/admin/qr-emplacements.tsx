@@ -1,17 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { EntetePage } from "@/components/espace/barre-laterale";
 import { Icon } from "@/components/ui/icon";
-import { Badge, Bouton, Carte, cx } from "@/components/ui/primitives";
-import { CHAMBRES, QR_CODES, TABLES } from "@/lib/demo/admin";
+import { Badge, Bouton, Carte, classeChamp, cx } from "@/components/ui/primitives";
+import { messageErreur } from "@/lib/api/client";
+import { referenceAffichee, referenceSaisie, type TypeEmplacement } from "@/lib/api/conversions";
+import { activerEmplacement, creerEmplacement, listerEmplacements, type EmplacementApi } from "@/lib/api/emplacements";
+import { QR_CODES } from "@/lib/demo/admin";
 
 /** A2 · QR codes du menu et emplacements. */
 export function QrEmplacements() {
   const [qrs, setQrs] = useState(QR_CODES);
-  const [tables, setTables] = useState(TABLES);
+  const [emplacements, setEmplacements] = useState<EmplacementApi[]>([]);
+  const [chargement, setChargement] = useState(true);
+  const [erreur, setErreur] = useState<string | null>(null);
   const [toutesChambres, setToutesChambres] = useState(false);
-  const chambres = toutesChambres ? CHAMBRES : CHAMBRES.slice(0, 16);
+  const [ajout, setAjout] = useState<{ type: TypeEmplacement; reference: string }>({ type: "TABLE", reference: "" });
+
+  const charger = useCallback(async () => {
+    try {
+      setEmplacements(await listerEmplacements());
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setChargement(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement depuis l'API
+    void charger();
+  }, [charger]);
+
+  const tables = emplacements
+    .filter((e) => e.type === "TABLE")
+    .sort((a, b) => a.reference.localeCompare(b.reference, "fr", { numeric: true }));
+  const toutes = emplacements
+    .filter((e) => e.type === "ROOM")
+    .sort((a, b) => a.reference.localeCompare(b.reference, "fr", { numeric: true }));
+  const chambres = toutesChambres ? toutes : toutes.slice(0, 16);
+
+  async function basculer(e: EmplacementApi) {
+    try {
+      const maj = await activerEmplacement(e.id, !e.is_active);
+      setEmplacements((prev) => prev.map((x) => (x.id === e.id ? maj : x)));
+    } catch (err) {
+      setErreur(messageErreur(err));
+    }
+  }
+
+  async function ajouter() {
+    if (!ajout.reference.trim()) return;
+    try {
+      const cree = await creerEmplacement(ajout.type, referenceSaisie(ajout.type, ajout.reference));
+      setEmplacements((prev) => [...prev, cree]);
+      setAjout((a) => ({ ...a, reference: "" }));
+      setErreur(null);
+    } catch (err) {
+      setErreur(messageErreur(err));
+    }
+  }
+
+  /** Lien à encoder dans le QR d'un emplacement : il pré-remplit le panier du client. */
+  const lienQr = (e: EmplacementApi) =>
+    `${window.location.origin}/menu?${e.type === "TABLE" ? "table" : "chambre"}=${encodeURIComponent(e.reference)}`;
 
   const basculerQr = (jeton: string) =>
     setQrs((prev) =>
@@ -31,11 +85,19 @@ export function QrEmplacements() {
     <>
       <EntetePage
         titre="QR codes et emplacements"
-        sousTitre="Le QR ouvre le menu général. Il ne contient jamais de table ni de chambre."
+        sousTitre="Le QR ouvre le menu. Un QR d'emplacement pré-remplit la table ou la chambre."
       />
+      {erreur ? (
+        <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
+          {erreur}
+        </div>
+      ) : null}
       <Carte className="flex flex-col gap-3.5 p-5">
         <div className="flex items-center justify-between">
-          <h2 className="m-0 text-[17px] font-bold">QR codes du menu</h2>
+          <h2 className="m-0 flex items-center gap-2 text-[17px] font-bold">
+            QR codes du menu
+            <span className="rounded-md bg-attention-fond px-2 py-0.5 text-xs font-bold text-attention">Démo · pas encore d&apos;API</span>
+          </h2>
           <Bouton variante="contour" hauteur="sm" icone="plus" onClick={nouveauQr}>
             Nouveau QR
           </Bouton>
@@ -101,48 +163,99 @@ export function QrEmplacements() {
           <span className="flex items-center gap-2 text-[13px] font-bold">
             <Icon name="table" className="size-[18px] text-vert" />
             Tables · {tables.length}
-            <span className="font-normal text-texte-3">(touchez une table pour la désactiver)</span>
+            <span className="font-normal text-texte-3">(touchez pour activer ou désactiver, clic droit pour copier le lien du QR)</span>
           </span>
           <div className="flex flex-wrap gap-1.5">
             {tables.map((t) => (
               <button
-                key={t.numero}
+                key={t.id}
                 type="button"
-                aria-pressed={t.active}
-                onClick={() => setTables((prev) => prev.map((x) => (x.numero === t.numero ? { ...x, active: !x.active } : x)))}
+                aria-pressed={t.is_active}
+                onClick={() => void basculer(t)}
+                onContextMenu={(ev) => {
+                  ev.preventDefault();
+                  void navigator.clipboard?.writeText(lienQr(t));
+                }}
+                title={lienQr(t)}
                 className={cx(
                   "flex h-9 min-w-11 cursor-pointer items-center justify-center rounded-lg border border-bordure px-2.5 text-[13px] font-bold",
-                  t.active ? "bg-papier text-encre" : "bg-ligne-3 text-texte-4 line-through",
+                  t.is_active ? "bg-papier text-encre" : "bg-ligne-3 text-texte-4 line-through",
                 )}
               >
-                {t.numero}
+                {referenceAffichee(t.type, t.reference)}
               </button>
             ))}
+            {!chargement && tables.length === 0 ? <span className="text-[13px] text-texte-3">Aucune table.</span> : null}
           </div>
         </div>
         <div className="flex flex-col gap-2">
           <span className="flex items-center gap-2 text-[13px] font-bold">
             <Icon name="bed" className="size-[18px] text-vert" />
-            Chambres · {CHAMBRES.length}
+            Chambres · {toutes.length}
           </span>
           <div className="flex flex-wrap gap-1.5">
             {chambres.map((c) => (
-              <span
-                key={c}
-                className="tabular flex h-9 min-w-[52px] items-center justify-center rounded-lg border border-bordure px-2.5 text-[13px] font-bold"
+              <button
+                key={c.id}
+                type="button"
+                aria-pressed={c.is_active}
+                onClick={() => void basculer(c)}
+                onContextMenu={(ev) => {
+                  ev.preventDefault();
+                  void navigator.clipboard?.writeText(lienQr(c));
+                }}
+                title={lienQr(c)}
+                className={cx(
+                  "tabular flex h-9 min-w-[52px] cursor-pointer items-center justify-center rounded-lg border border-bordure px-2.5 text-[13px] font-bold",
+                  c.is_active ? "bg-papier text-encre" : "bg-ligne-3 text-texte-4 line-through",
+                )}
               >
-                {c}
-              </span>
+                {c.reference}
+              </button>
             ))}
-            <button
-              type="button"
-              onClick={() => setToutesChambres((v) => !v)}
-              className="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-texte-3 hover:text-vert"
-            >
-              {toutesChambres ? "Réduire" : `+ ${CHAMBRES.length - 16} autres`}
-            </button>
+            {toutes.length > 16 ? (
+              <button
+                type="button"
+                onClick={() => setToutesChambres((v) => !v)}
+                className="flex h-9 cursor-pointer items-center rounded-lg px-3 text-[13px] text-texte-3 hover:text-vert"
+              >
+                {toutesChambres ? "Réduire" : `+ ${toutes.length - 16} autres`}
+              </button>
+            ) : null}
+            {!chargement && toutes.length === 0 ? <span className="text-[13px] text-texte-3">Aucune chambre.</span> : null}
           </div>
         </div>
+        <form
+          className="flex flex-wrap items-end gap-2 border-t border-ligne-3 pt-3.5"
+          onSubmit={(ev) => {
+            ev.preventDefault();
+            void ajouter();
+          }}
+        >
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Type</span>
+            <select
+              value={ajout.type}
+              onChange={(ev) => setAjout((a) => ({ ...a, type: ev.target.value as TypeEmplacement }))}
+              className={cx(classeChamp, "h-10 cursor-pointer")}
+            >
+              <option value="TABLE">Table</option>
+              <option value="ROOM">Chambre</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Numéro</span>
+            <input
+              value={ajout.reference}
+              onChange={(ev) => setAjout((a) => ({ ...a, reference: ev.target.value.slice(0, 30) }))}
+              placeholder={ajout.type === "TABLE" ? "15" : "413"}
+              className={cx(classeChamp, "h-10 w-32")}
+            />
+          </label>
+          <Bouton type="submit" variante="contour" hauteur="sm" icone="plus" disabled={!ajout.reference.trim()}>
+            Ajouter
+          </Bouton>
+        </form>
       </Carte>
     </>
   );

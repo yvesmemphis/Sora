@@ -1,20 +1,14 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
-import { FichePlat } from "@/components/client/fiche-plat";
-import { PLATS, trouverPlat } from "@/lib/demo/menu";
+import { Suspense } from "react";
+import { FichePlatDepuisUrl } from "@/components/client/fiche-plat";
 
-export function generateStaticParams() {
-  return PLATS.map((p) => ({ slug: p.slug }));
-}
+export const metadata: Metadata = { title: "Plat" };
 
-export async function generateMetadata({ params }: PageProps<"/menu/[slug]">): Promise<Metadata> {
-  const { slug } = await params;
-  return { title: trouverPlat(slug)?.nom ?? "Plat" };
-}
-
-export default async function PagePlat({ params }: PageProps<"/menu/[slug]">) {
-  const { slug } = await params;
-  const plat = trouverPlat(slug);
-  if (!plat) notFound();
-  return <FichePlat plat={plat} />;
+export default function PagePlat({ params }: PageProps<"/menu/[slug]">) {
+  // La carte vient de l'API côté navigateur : la zone dynamique est isolée dans Suspense.
+  return (
+    <Suspense fallback={<div className="flex flex-1 items-center justify-center text-texte-3">Chargement…</div>}>
+      <FichePlatDepuisUrl params={params} />
+    </Suspense>
+  );
 }

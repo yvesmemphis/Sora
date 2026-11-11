@@ -11,7 +11,9 @@ export type StatutCommande =
   | "confirmee" // fin du délai : transmise à la cuisine
   | "preparation"
   | "prete"
+  | "livraison" // en cours de livraison (chambre)
   | "servie" // servie en salle ou livrée en chambre
+  | "cloturee" // soldée et clôturée
   | "annulee"
   | "refusee";
 
@@ -21,20 +23,28 @@ export type ModePaiement = "especes" | "carte";
 
 export type Disponibilite = "disponible" | "temporaire" | "epuise";
 
-export type Categorie = "Entrées" | "Plats" | "Grillades" | "Accompagnements" | "Desserts" | "Boissons";
+/** Nom de catégorie, défini côté backend (`/categories/`). */
+export type Categorie = string;
 
 export interface Plat {
+  /** UUID du plat côté backend (`Dish.id`). */
   id: string;
+  /** Identifiant d'URL : identique à `id` depuis le branchement de l'API. */
   slug: string;
   nom: string;
   description: string;
   descriptionLongue?: string;
   categorie: Categorie;
   prix: number; // FCFA
-  preparationMin: number;
+  /** Temps de préparation, inconnu pour le menu public. */
+  preparationMin: number | null;
   disponibilite: Disponibilite;
   allergenes: string[];
   versionRecette?: string;
+  /** URL absolue de la photo, si le plat en a une. */
+  image?: string | null;
+  categorieId?: string;
+  publie?: boolean;
 }
 
 export interface LigneCommande {
@@ -53,13 +63,23 @@ export interface EvenementCommande {
 }
 
 export interface Commande {
-  numero: string; // « 0142 »
+  /** Identifiant numérique côté backend (`Order.id`). */
+  id?: number;
+  numero: string; // « 251111-0042 »
   statut: StatutCommande;
   mode: ModeService;
   emplacement: string; // « 204 », « 6 », ou « Au comptoir »
   passeeA: string; // « 19 h 31 »
+  /** Mode de paiement annoncé ; non stocké par le backend pour l'instant. */
   paiement: ModePaiement;
   payee: boolean;
+  /** Total calculé par le serveur, en FCFA. */
+  total?: number;
+  /** Horodatage ISO de création. */
+  creeeLe?: string;
+  /** Horodatage ISO du dernier changement (début du statut courant). */
+  majLe?: string;
+  source?: "PUBLIC" | "STAFF";
   lignes: LigneCommande[];
   note?: string;
   historique: EvenementCommande[];

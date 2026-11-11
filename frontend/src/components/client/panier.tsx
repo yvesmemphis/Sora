@@ -2,9 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Encadre, Quantite, cx } from "@/components/ui/primitives";
+import { messageErreur } from "@/lib/api/client";
+import { lireEmplacementQr, useMenu } from "@/lib/client/menu";
 import { usePanier } from "@/lib/client/panier";
 import { formatFCFA } from "@/lib/format";
 import { MODES_PAIEMENT, MODES_SERVICE } from "@/lib/statuts";
@@ -21,21 +23,42 @@ export function Panier() {
   const [emplacement, setEmplacement] = useState("");
   const [paiement, setPaiement] = useState<ModePaiement>("especes");
   const [erreur, setErreur] = useState<string | null>(null);
+  const [erreurEnvoi, setErreurEnvoi] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
+  const { menu } = useMenu();
+
+  // Pré-remplissage depuis le QR code scanné.
+  useEffect(() => {
+    const qr = lireEmplacementQr();
+    if (!qr) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- lecture du stockage du navigateur
+    setMode(qr.mode);
+    setEmplacement(qr.mode === "table" ? qr.reference.replace(/^T/i, "") : qr.reference);
+  }, []);
 
   const modeInfo = MODES_SERVICE[mode];
   const emplacementRequis = mode !== "emporter";
 
-  function commander() {
+  async function commander() {
     if (emplacementRequis && !emplacement.trim()) {
       setErreur(`Indiquez le ${modeInfo.champ.toLowerCase()}.`);
       return;
     }
-    const commande = passerCommande({
-      mode,
-      emplacement: emplacementRequis ? emplacement.trim() : "Au comptoir",
-      paiement,
-    });
-    router.push(`/suivi/${commande.numero}`);
+    setErreurEnvoi(null);
+    setEnvoi(true);
+    try {
+      const commande = await passerCommande({
+        mode,
+        emplacement: emplacementRequis ? emplacement.trim() : "Au comptoir",
+        paiement,
+      });
+      router.push(`/suivi/${encodeURIComponent(commande.jeton)}`);
+    } catch (e) {
+      const message = messageErreur(e);
+      if (/emplacement/i.test(message)) setErreur(`${modeInfo.champ} inconnu. Vérifiez le numéro.`);
+      else setErreurEnvoi(message);
+      setEnvoi(false);
+    }
   }
 
   return (
@@ -158,8 +181,13 @@ export function Panier() {
             </fieldset>
 
             <Encadre icone="clock">
-              Vous pourrez annuler pendant 5 minutes après avoir commandé. Rien n&apos;est débité en ligne.
+              Votre commande est confirmée par le personnel avant d&apos;être préparée. Rien n&apos;est débité en ligne.
             </Encadre>
+            {erreurEnvoi ? (
+              <div role="alert" className="rounded-xl bg-danger-fond px-3.5 py-3 text-sm font-bold text-danger">
+                {erreurEnvoi}
+              </div>
+            ) : null}
           </div>
 
           <div className="sticky bottom-0 flex flex-col gap-3 border-t border-ligne-2 bg-creme px-5 pt-3.5 pb-[max(24px,env(safe-area-inset-bottom))]">
@@ -172,10 +200,10 @@ export function Panier() {
             <button
               type="button"
               onClick={commander}
-              disabled={!pret || lignes.length === 0}
+              disabled={!pret || lignes.length === 0 || envoi || menu?.commandesOuvertes === false}
               className="flex h-14 cursor-pointer items-center justify-center gap-2 rounded-xl bg-terracotta text-base font-bold text-creme disabled:opacity-50"
             >
-              Commander · {formatFCFA(total)}
+              {envoi ? "Envoi…" : menu?.commandesOuvertes === false ? "Commandes fermées" : `Commander · ${formatFCFA(total)}`}
               <Icon name="arrow" className="size-[18px]" />
             </button>
           </div>
