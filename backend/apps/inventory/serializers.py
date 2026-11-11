@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from .models import (
@@ -176,6 +177,7 @@ class RecipeVersionSerializer(serializers.ModelSerializer):
 
     items = serializers.SerializerMethodField()
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_items(self, obj):
         return RecipeItemSerializer(obj.items.select_related("ingredient"), many=True).data
 

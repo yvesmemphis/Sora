@@ -6,6 +6,7 @@ from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.accounts.factories import UserFactory
+from apps.menu.factories import DishFactory
 from common.constants import OrderStatus, Role
 from common.exceptions import DomainError
 
@@ -88,11 +89,7 @@ def test_order_create_endpoint_rejects_client_supplied_price():
 
     response = client.post(
         "/api/v1/orders/",
-        {
-            "items": [
-                {"menu_item_id": "soupe", "quantity": 1, "unit_price": "0.01"}
-            ]
-        },
+        {"items": [{"menu_item_id": "soupe", "quantity": 1, "unit_price": "0.01"}]},
         format="json",
     )
 
@@ -100,30 +97,31 @@ def test_order_create_endpoint_rejects_client_supplied_price():
     assert "unit_price" in response.json()["details"]["items"]["0"]
 
 
-def test_order_create_requires_a_server_menu_pricing_adapter():
+def test_order_create_uses_local_server_menu_price():
     client = APIClient()
     client.force_authenticate(UserFactory(role=Role.WAITER))
+    dish = DishFactory(price="7.25")
 
     response = client.post(
         "/api/v1/orders/",
-        {"items": [{"menu_item_id": "soupe", "quantity": 1}]},
+        {"items": [{"menu_item_id": str(dish.pk), "quantity": 2}]},
         format="json",
     )
 
-    assert response.status_code == 503
-    assert response.json()["code"] == "menu_pricing_unavailable"
+    assert response.status_code == 201
+    assert response.data["total"] == "14.50"
 
 
 def test_transition_is_role_checked_and_historized():
     order = Order.objects.create(status=OrderStatus.CONFIRMED)
     kitchen_user = UserFactory(role=Role.KITCHEN)
 
-    result = transition_order(
-        order.pk, OrderStatus.PREPARING, actor=kitchen_user
-    )
+    result = transition_order(order.pk, OrderStatus.PREPARING, actor=kitchen_user)
 
     assert result.status == OrderStatus.PREPARING
-    history = OrderStatusHistory.objects.get(order=order, to_status=OrderStatus.PREPARING)
+    history = OrderStatusHistory.objects.get(
+        order=order, to_status=OrderStatus.PREPARING
+    )
     assert history.changed_by == kitchen_user
 
 
@@ -172,10 +170,31 @@ def test_manager_can_reject_and_history_records_the_transition():
     manager = UserFactory(role=Role.MANAGER)
     order = Order.objects.create(status=OrderStatus.RECEIVED)
 
-    updated = transition_order(order.pk, OrderStatus.REJECTED, actor=manager)
+    updated = transition_order(
+        order.pk, OrderStatus.REJECTED, actor=manager, note="Hors service"
+    )
 
     assert updated.status == OrderStatus.REJECTED
     history = OrderStatusHistory.objects.get(order=order)
     assert history.from_status == OrderStatus.RECEIVED
     assert history.to_status == OrderStatus.REJECTED
     assert history.changed_by == manager
+
+
+def test_cancel_requires_a_reason_and_kitchen_cannot_cancel_preparation():
+    manager = UserFactory(role=Role.MANAGER)
+    kitchen_user = UserFactory(role=Role.KITCHEN)
+    order = Order.objects.create(status=OrderStatus.PREPARING)
+
+    with pytest.raises(DomainError) as error:
+        transition_order(order.pk, OrderStatus.CANCELLED, actor=manager)
+    assert error.value.code == "reason_required"
+
+    with pytest.raises(DomainError) as error:
+        transition_order(
+            order.pk,
+            OrderStatus.CANCELLED,
+            actor=kitchen_user,
+            note="Arrêt",
+        )
+    assert error.value.status_code == 403

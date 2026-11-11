@@ -1,5 +1,8 @@
 from rest_framework import serializers
 
+from apps.locations.models import Location
+from common.constants import OrderMode
+
 from .models import ORDER_STATUS_CHOICES, Order, OrderItem
 
 
@@ -33,7 +36,11 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             "id",
+            "number",
             "status",
+            "mode",
+            "location",
+            "source",
             "table_number",
             "customer_name",
             "customer_phone",
@@ -54,7 +61,16 @@ class KitchenOrderSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Order
-        fields = ["id", "status", "table_number", "notes", "created_at", "items"]
+        fields = [
+            "id",
+            "number",
+            "status",
+            "mode",
+            "table_number",
+            "notes",
+            "created_at",
+            "items",
+        ]
         read_only_fields = fields
 
 
@@ -69,16 +85,33 @@ class OrderItemInputSerializer(serializers.Serializer):
         unknown = set(data) - set(self.fields)
         if unknown:
             raise serializers.ValidationError(
-                {field: "Champ non accepté; le prix est calculé côté serveur." for field in sorted(unknown)}
+                {
+                    field: "Champ non accepté; le prix est calculé côté serveur."
+                    for field in sorted(unknown)
+                }
             )
         return super().to_internal_value(data)
 
 
 class OrderCreateSerializer(serializers.Serializer):
     items = OrderItemInputSerializer(many=True, allow_empty=False)
-    table_number = serializers.IntegerField(min_value=1, required=False, allow_null=True)
-    customer_name = serializers.CharField(max_length=120, required=False, allow_blank=True)
-    customer_phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    mode = serializers.ChoiceField(
+        choices=OrderMode.choices, required=False, default=OrderMode.TAKEAWAY
+    )
+    location = serializers.PrimaryKeyRelatedField(
+        queryset=Location.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    table_number = serializers.IntegerField(
+        min_value=1, required=False, allow_null=True
+    )
+    customer_name = serializers.CharField(
+        max_length=120, required=False, allow_blank=True
+    )
+    customer_phone = serializers.CharField(
+        max_length=30, required=False, allow_blank=True
+    )
     notes = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
     def to_internal_value(self, data):

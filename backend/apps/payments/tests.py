@@ -120,6 +120,26 @@ def test_waiter_payment_response_does_not_expose_amount_or_card_data():
     assert "card_last_four" not in response.json()
 
 
+def test_payment_rejects_luhn_card_number_with_spaces():
+    waiter = UserFactory(role=Role.WAITER)
+    order = make_order(owner=waiter)
+    client = APIClient()
+    client.force_authenticate(waiter)
+
+    response = client.post(
+        f"/api/v1/orders/{order.pk}/payments/",
+        {
+            "amount": "1.00",
+            "payment_method": "card",
+            "reference": "4111 1111 1111 1111",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert not Payment.objects.filter(order=order).exists()
+
+
 def test_manager_refund_request_and_processing_are_audited():
     manager = UserFactory(role=Role.MANAGER)
     payment = Payment.objects.create(

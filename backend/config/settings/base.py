@@ -1,7 +1,9 @@
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -86,6 +88,67 @@ USE_TZ = True
 STATIC_URL = "static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
+SUPABASE_STORAGE_BUCKET = env("SUPABASE_STORAGE_BUCKET", default="")
+SUPABASE_STORAGE_REGION = env("SUPABASE_STORAGE_REGION", default="")
+SUPABASE_S3_ENDPOINT_URL = env("SUPABASE_S3_ENDPOINT_URL", default="")
+SUPABASE_S3_ACCESS_KEY_ID = env("SUPABASE_S3_ACCESS_KEY_ID", default="")
+SUPABASE_S3_SECRET_ACCESS_KEY = env("SUPABASE_S3_SECRET_ACCESS_KEY", default="")
+SUPABASE_STORAGE_PUBLIC_BASE_URL = env(
+    "SUPABASE_STORAGE_PUBLIC_BASE_URL", default=""
+)
+
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+    },
+}
+
+supabase_storage_values = (
+    SUPABASE_STORAGE_BUCKET,
+    SUPABASE_STORAGE_REGION,
+    SUPABASE_S3_ENDPOINT_URL,
+    SUPABASE_S3_ACCESS_KEY_ID,
+    SUPABASE_S3_SECRET_ACCESS_KEY,
+    SUPABASE_STORAGE_PUBLIC_BASE_URL,
+)
+if any(supabase_storage_values) and not all(supabase_storage_values):
+    raise ImproperlyConfigured(
+        "Configure all SUPABASE_STORAGE_* and SUPABASE_S3_* settings, "
+        "or leave them all empty to use local media storage."
+    )
+
+if all(supabase_storage_values):
+    public_storage_url = urlsplit(SUPABASE_STORAGE_PUBLIC_BASE_URL)
+    s3_endpoint = urlsplit(SUPABASE_S3_ENDPOINT_URL)
+    if (
+        public_storage_url.scheme != "https"
+        or not public_storage_url.netloc
+        or s3_endpoint.scheme != "https"
+        or not s3_endpoint.netloc
+    ):
+        raise ImproperlyConfigured("Supabase Storage URLs must use HTTPS.")
+
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "access_key": SUPABASE_S3_ACCESS_KEY_ID,
+            "secret_key": SUPABASE_S3_SECRET_ACCESS_KEY,
+            "bucket_name": SUPABASE_STORAGE_BUCKET,
+            "region_name": SUPABASE_STORAGE_REGION,
+            "endpoint_url": SUPABASE_S3_ENDPOINT_URL,
+            "addressing_style": "path",
+            "signature_version": "s3v4",
+            "default_acl": None,
+            "querystring_auth": False,
+            "file_overwrite": False,
+            "custom_domain": (
+                f"{public_storage_url.netloc}{public_storage_url.path.rstrip('/')}"
+            ),
+            "url_protocol": "https:",
+        },
+    }
 
 PASSWORD_RESET_TIMEOUT = 3600
 AUTH_PASSWORD_VALIDATORS = [

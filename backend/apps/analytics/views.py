@@ -1,19 +1,28 @@
-
 from datetime import date
 
 from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.utils import timezone
-from rest_framework import generics, status
-from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import extend_schema
+from rest_framework import generics, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from common.constants import MANAGERS, Role
+from common.constants import ALL_ROLES, MANAGERS, Role
+from common.permissions import RolePermission
 
 from . import services
 from .models import Forecast
 from .serializers import ForecastReviewSerializer, ForecastSerializer
+
+
+class OverviewResponseSerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False)
+    end_date = serializers.DateField(required=False)
+    orders = serializers.DictField(child=serializers.IntegerField(), required=False)
+    payments = serializers.DictField(child=serializers.IntegerField(), required=False)
+    revenue = serializers.DictField(child=serializers.CharField(), required=False)
+    daily_order_count = serializers.IntegerField(required=False)
 
 
 def _date_parameter(value, fallback):
@@ -29,8 +38,10 @@ def _date_parameter(value, fallback):
 
 
 class OverviewView(APIView):
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (RolePermission,)
+    role_map = {"*": ALL_ROLES}
 
+    @extend_schema(responses=OverviewResponseSerializer)
     def get(self, request):
         today = timezone.localdate()
         if getattr(request.user, "role", None) == Role.WAITER:
@@ -40,7 +51,9 @@ class OverviewView(APIView):
             end_date = _date_parameter(request.query_params.get("end_date"), today)
             data = services.overview(start_date, end_date)
         except ValidationError as exc:
-            return Response({"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST
+            )
 
         role = getattr(request.user, "role", None)
         if role == Role.KITCHEN:
@@ -49,7 +62,8 @@ class OverviewView(APIView):
 
 
 class ForecastListView(generics.ListAPIView):
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (RolePermission,)
+    role_map = {"*": MANAGERS}
     serializer_class = ForecastSerializer
     queryset = Forecast.objects.all()
 
@@ -63,8 +77,10 @@ class ForecastListView(generics.ListAPIView):
 
 
 class ForecastReviewView(APIView):
-    permission_classes = (IsAuthenticated,)
+    permission_classes = (RolePermission,)
+    role_map = {"*": MANAGERS}
 
+    @extend_schema(request=ForecastReviewSerializer, responses=ForecastSerializer)
     def post(self, request, pk, decision):
         if getattr(request.user, "role", None) not in MANAGERS:
             return Response(
@@ -89,5 +105,7 @@ class ForecastReviewView(APIView):
         except Forecast.DoesNotExist as exc:
             raise Http404 from exc
         except ValidationError as exc:
-            return Response({"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": exc.messages}, status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(ForecastSerializer(forecast).data)

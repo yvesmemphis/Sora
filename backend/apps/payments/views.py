@@ -1,12 +1,13 @@
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.orders.models import Order
-from common.constants import MANAGERS, Role
+from common.constants import FRONT_OF_HOUSE, MANAGERS, Role
+from common.permissions import RolePermission
 
 from . import services
 from .models import Payment
@@ -32,8 +33,10 @@ def _can_access_order(user, order):
 
 
 class OrderPaymentsView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [RolePermission]
+    role_map = {"*": FRONT_OF_HOUSE}
 
+    @extend_schema(responses=PaymentSerializer(many=True))
     def get(self, request, order_id):
         _require_roles(request.user, MANAGERS | {Role.WAITER})
         order = get_object_or_404(Order, pk=order_id)
@@ -41,10 +44,16 @@ class OrderPaymentsView(APIView):
             raise PermissionDenied("Commande non accessible.")
         payments = Payment.objects.filter(order=order).order_by("-created_at")
         serializer_class = (
-            PaymentSerializer if request.user.role in MANAGERS else PaymentSummarySerializer
+            PaymentSerializer
+            if request.user.role in MANAGERS
+            else PaymentSummarySerializer
         )
         return Response(serializer_class(payments, many=True).data)
 
+    @extend_schema(
+        request=PaymentCreateSerializer,
+        responses={201: PaymentSerializer},
+    )
     def post(self, request, order_id):
         _require_roles(request.user, MANAGERS | {Role.WAITER})
         order = get_object_or_404(Order, pk=order_id)
@@ -69,8 +78,13 @@ class OrderPaymentsView(APIView):
 
 
 class PaymentRefundsView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [RolePermission]
+    role_map = {"*": MANAGERS}
 
+    @extend_schema(
+        request=RefundCreateSerializer,
+        responses={201: RefundSerializer},
+    )
     def post(self, request, payment_id):
         _require_roles(request.user, MANAGERS)
         payment = get_object_or_404(Payment, pk=payment_id)
@@ -88,8 +102,13 @@ class PaymentRefundsView(APIView):
 
 
 class RefundProcessView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [RolePermission]
+    role_map = {"*": MANAGERS}
 
+    @extend_schema(
+        request=RefundProcessSerializer,
+        responses=RefundSerializer,
+    )
     def post(self, request, refund_id):
         _require_roles(request.user, MANAGERS)
         serializer = RefundProcessSerializer(data=request.data)

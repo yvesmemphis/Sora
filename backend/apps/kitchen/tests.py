@@ -10,12 +10,12 @@ from rest_framework.test import APIClient
 
 from apps.accounts.factories import UserFactory
 from apps.orders.models import Order
-from common.constants import Role
+from apps.orders.services import transition_order
+from common.constants import OrderStatus, Role
 
 from .consumers import KitchenConsumer
 from .models import KitchenQueueItem
-from .services import generate_kitchen_ticket
-from .services import publish_order_event
+from .services import generate_kitchen_ticket, publish_order_event
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -57,6 +57,19 @@ def test_queue_rejects_invalid_updated_after():
     assert response.status_code == 400
 
 
+def test_confirmed_order_is_visible_in_the_kitchen_queue():
+    order = Order.objects.create(status=OrderStatus.RECEIVED)
+    manager = UserFactory(role=Role.MANAGER)
+    transition_order(order.pk, OrderStatus.CONFIRMED, actor=manager)
+    client = APIClient()
+    client.force_authenticate(UserFactory(role=Role.KITCHEN))
+
+    response = client.get("/api/v1/kitchen/queue/")
+
+    assert response.status_code == 200
+    assert response.json()[0]["status"] == "CONFIRMED"
+
+
 def test_queue_delta_includes_served_status_as_a_removal_tombstone():
     client = APIClient()
     client.force_authenticate(UserFactory(role=Role.KITCHEN))
@@ -66,9 +79,7 @@ def test_queue_delta_includes_served_status_as_a_removal_tombstone():
         "%Y-%m-%dT%H:%M:%SZ"
     )
 
-    delta = client.get(
-        f"/api/v1/kitchen/queue/?updated_after={updated_after}"
-    )
+    delta = client.get(f"/api/v1/kitchen/queue/?updated_after={updated_after}")
     full_queue = client.get("/api/v1/kitchen/queue/")
 
     assert delta.status_code == 200

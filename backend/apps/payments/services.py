@@ -1,6 +1,6 @@
-import re
 from decimal import Decimal, InvalidOperation
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Sum
 from django.utils import timezone
@@ -11,7 +11,7 @@ from apps.orders.services import transition_order
 from common.constants import MANAGERS, OrderStatus, Role
 from common.exceptions import DomainError
 
-from .models import Payment, Refund
+from .models import Payment, Refund, reject_card_like
 
 ZERO = Decimal("0.00")
 
@@ -44,22 +44,25 @@ def _amount(value, *, field="Montant"):
 
 
 def net_paid(order):
-    confirmed = Payment.objects.filter(
-        order=order,
-        status__in=["CONFIRMED", "REFUNDED"],
-    ).aggregate(total=Sum("amount"))["total"] or ZERO
-    refunded = Refund.objects.filter(
-        payment__order=order,
-        status="COMPLETED",
-    ).aggregate(total=Sum("amount"))["total"] or ZERO
+    confirmed = (
+        Payment.objects.filter(
+            order=order,
+            status__in=["CONFIRMED", "REFUNDED"],
+        ).aggregate(total=Sum("amount"))["total"]
+        or ZERO
+    )
+    refunded = (
+        Refund.objects.filter(
+            payment__order=order,
+            status="COMPLETED",
+        ).aggregate(total=Sum("amount"))["total"]
+        or ZERO
+    )
     return confirmed - refunded
 
 
 def settle_if_paid(order, *, actor):
-    if (
-        order.status == OrderStatus.SERVED
-        and net_paid(order) >= order.total
-    ):
+    if order.status == OrderStatus.SERVED and net_paid(order) >= order.total:
         transition_order(
             order.pk,
             OrderStatus.COMPLETED,
@@ -78,15 +81,15 @@ def register_payment(*, order, amount, payment_method, user, reference=None):
     payment_method = str(payment_method).strip()
     allowed_methods = {choice[0] for choice in Payment.METHOD_CHOICES}
     if payment_method not in allowed_methods:
-        raise DomainError(
-            "invalid_payment_method", "Mode de paiement invalide.", 400
-        )
-    if reference and re.fullmatch(r"\d{13,19}", str(reference).strip()):
+        raise DomainError("invalid_payment_method", "Mode de paiement invalide.", 400)
+    try:
+        reject_card_like(reference)
+    except DjangoValidationError as exc:
         raise DomainError(
             "card_data_forbidden",
-            "Les numéros de carte ne doivent jamais être transmis ni stockés.",
+            str(exc),
             400,
-        )
+        ) from exc
     try:
         locked_order = Order.objects.select_for_update().get(pk=order.pk)
     except Order.DoesNotExist:
@@ -135,9 +138,9 @@ def refund_payment(*, payment, amount=None, user, reason):
     if not reason:
         raise DomainError("reason_required", "Un motif est obligatoire.", 400)
 
-    payment_order_id = Payment.objects.filter(pk=payment.pk).values_list(
-        "order_id", flat=True
-    ).first()
+    payment_order_id = (
+        Payment.objects.filter(pk=payment.pk).values_list("order_id", flat=True).first()
+    )
     if payment_order_id is None:
         raise DomainError("payment_not_found", "Paiement introuvable.", 404)
     Order.objects.select_for_update().get(pk=payment_order_id)
@@ -155,9 +158,12 @@ def refund_payment(*, payment, amount=None, user, reason):
         if amount is not None
         else locked_payment.amount
     )
-    reserved = locked_payment.refunds.exclude(status="FAILED").aggregate(
-        total=Sum("amount")
-    )["total"] or ZERO
+    reserved = (
+        locked_payment.refunds.exclude(status="FAILED").aggregate(total=Sum("amount"))[
+            "total"
+        ]
+        or ZERO
+    )
     if reserved + refund_amount > locked_payment.amount:
         raise DomainError(
             "refund_limit_exceeded",
@@ -185,16 +191,18 @@ def refund_payment(*, payment, amount=None, user, reason):
 def process_refund(*, refund_id, target_status, user):
     _require_actor(user, MANAGERS)
     if target_status not in {"COMPLETED", "FAILED"}:
-        raise DomainError("invalid_refund_status", "Statut de remboursement invalide.", 400)
+        raise DomainError(
+            "invalid_refund_status", "Statut de remboursement invalide.", 400
+        )
 
-    payment_id = Refund.objects.filter(pk=refund_id).values_list(
-        "payment_id", flat=True
-    ).first()
+    payment_id = (
+        Refund.objects.filter(pk=refund_id).values_list("payment_id", flat=True).first()
+    )
     if payment_id is None:
         raise DomainError("refund_not_found", "Remboursement introuvable.", 404)
-    payment_order_id = Payment.objects.filter(pk=payment_id).values_list(
-        "order_id", flat=True
-    ).first()
+    payment_order_id = (
+        Payment.objects.filter(pk=payment_id).values_list("order_id", flat=True).first()
+    )
     Order.objects.select_for_update().get(pk=payment_order_id)
     locked_payment = Payment.objects.select_for_update().get(pk=payment_id)
     refund = Refund.objects.select_for_update().get(pk=refund_id)
@@ -209,9 +217,12 @@ def process_refund(*, refund_id, target_status, user):
     refund.processed_at = timezone.now()
     refund.save(update_fields=["status", "processed_at", "updated_at"])
     if target_status == "COMPLETED":
-        completed_total = locked_payment.refunds.filter(status="COMPLETED").aggregate(
-            total=Sum("amount")
-        )["total"] or ZERO
+        completed_total = (
+            locked_payment.refunds.filter(status="COMPLETED").aggregate(
+                total=Sum("amount")
+            )["total"]
+            or ZERO
+        )
         if completed_total >= locked_payment.amount:
             locked_payment.status = "REFUNDED"
             locked_payment.save(update_fields=["status", "updated_at"])

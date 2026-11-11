@@ -1,11 +1,15 @@
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
+
+from common.constants import OrderMode
 
 ORDER_STATUS_CHOICES = [
     ("RECEIVED", "Received"),
     ("CONFIRMED", "Confirmed"),
     ("PREPARING", "Preparing"),
     ("READY", "Ready"),
+    ("OUT_FOR_DELIVERY", "Out for delivery"),
     ("SERVED", "Served"),
     ("COMPLETED", "Completed"),
     ("CANCELLED", "Cancelled"),
@@ -52,6 +56,18 @@ class Order(models.Model):
         help_text="Clé d'idempotence pour les requêtes en double",
     )
     idempotency_fingerprint = models.CharField(max_length=64, blank=True)
+    number = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    mode = models.CharField(
+        max_length=12, choices=OrderMode.choices, default=OrderMode.TAKEAWAY
+    )
+    location = models.ForeignKey(
+        "locations.Location",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="orders",
+    )
+    source = models.CharField(max_length=10, default="STAFF")
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -59,9 +75,7 @@ class Order(models.Model):
         blank=True,
         related_name="created_orders",
     )
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="RECEIVED"
-    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="RECEIVED")
     table_number = models.IntegerField(
         null=True, blank=True, help_text="Numéro de table (si applicable)"
     )
@@ -109,9 +123,7 @@ class Order(models.Model):
 class OrderItem(models.Model):
     """Ligne de commande - détail des articles."""
 
-    order = models.ForeignKey(
-        Order, on_delete=models.CASCADE, related_name="items"
-    )
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     menu_item_id = models.CharField(max_length=50)
     menu_item_name = models.CharField(max_length=120)
     quantity = models.PositiveIntegerField(default=1)
@@ -146,3 +158,8 @@ class OrderItem(models.Model):
     def get_cost(self):
         """Retourne le coût unitaire de cette ligne."""
         return self.unit_price
+
+
+class OrderCounter(models.Model):
+    date = models.DateField(unique=True, default=timezone.localdate)
+    last = models.PositiveIntegerField(default=0)

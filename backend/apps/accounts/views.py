@@ -7,6 +7,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -26,6 +27,10 @@ from .serializers import (
 User = get_user_model()
 
 
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=False, allow_blank=True)
+
+
 class LoginView(TokenObtainPairView):
     throttle_classes: ClassVar[list] = [ScopedRateThrottle]
     throttle_scope = "login"
@@ -42,6 +47,7 @@ class LogoutView(APIView):
     permission_classes: ClassVar[list] = [IsAuthenticated]
     auth_view = True
 
+    @extend_schema(request=LogoutSerializer, responses={204: None})
     def post(self, request):
         try:
             RefreshToken(request.data.get("refresh", "")).blacklist()
@@ -54,6 +60,7 @@ class MeView(APIView):
     permission_classes: ClassVar[list] = [IsAuthenticated]
     auth_view = True
 
+    @extend_schema(responses=MeSerializer)
     def get(self, request):
         return Response(MeSerializer(request.user).data)
 
@@ -65,6 +72,7 @@ class PasswordResetRequestView(APIView):
     throttle_scope = "password_reset"
     auth_view = True
 
+    @extend_schema(request=PasswordResetRequestSerializer, responses={202: None})
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -84,6 +92,7 @@ class PasswordResetConfirmView(APIView):
     throttle_scope = "password_reset"
     auth_view = True
 
+    @extend_schema(request=PasswordResetConfirmSerializer, responses={204: None})
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

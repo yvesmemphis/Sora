@@ -39,13 +39,18 @@ def create_order(day, *, status="COMPLETED", item=None, quantity=1):
 
 
 def create_payment(order, *, amount="10.00", status="CONFIRMED", currency="EUR"):
-    return Payment.objects.create(
+    payment = Payment.objects.create(
         order=order,
         amount=Decimal(amount),
         status=status,
         currency=currency,
         payment_method="cash",
     )
+    Payment.objects.filter(pk=payment.pk).update(
+        created_at=order.created_at,
+        captured_at=order.created_at,
+    )
+    return payment
 
 
 def test_overview_counts_orders_payments_and_nets_completed_refunds():
@@ -76,9 +81,10 @@ def test_overview_counts_orders_payments_and_nets_completed_refunds():
 
 def test_overview_rejects_reversed_and_overlong_date_ranges():
     day = date(2026, 11, 10)
-    assert overview(day - timedelta(days=365), day)["start_date"] == (
-        day - timedelta(days=365)
-    ).isoformat()
+    assert (
+        overview(day - timedelta(days=365), day)["start_date"]
+        == (day - timedelta(days=365)).isoformat()
+    )
     with pytest.raises(ValidationError):
         overview(day, day - timedelta(days=1))
     with pytest.raises(ValidationError):

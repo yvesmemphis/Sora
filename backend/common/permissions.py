@@ -6,7 +6,8 @@ class RolePermission(BasePermission):
         if not request.user or not request.user.is_authenticated:
             return False
 
-        allowed_roles = getattr(view, "role_map", {}).get(
-            getattr(view, "action", None), set()
+        role_map = getattr(view, "role_map", {})
+        allowed_roles = role_map.get(
+            getattr(view, "action", None), role_map.get("*", set())
         )
         return request.user.is_active and request.user.role in allowed_roles

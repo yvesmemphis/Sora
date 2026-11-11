@@ -1,10 +1,9 @@
 # Backend
 
-Socle API REST multi-restaurant construit avec Django 5.2, Django REST
-Framework, PostgreSQL, Redis, Channels et JWT. Le dépôt fournit la structure,
-les réglages par environnement, l'authentification initiale et le cadre partagé.
-Les applications métier autres que les comptes et l'audit sont encore des
-squelettes : leurs modèles, règles métier et API restent à implémenter.
+API REST multi-restaurant construite avec Django 5.2, Django REST Framework,
+PostgreSQL, Redis, Channels et JWT. Elle couvre les comptes et rôles, le menu,
+les emplacements, les commandes publiques et du personnel, la cuisine en temps
+réel, les paiements, les stocks, la production, l'audit et les prévisions.
 
 ## Prérequis
 
@@ -45,6 +44,56 @@ il est exclu par `.gitignore`. `.env.example` est le modèle sans secret à gard
 à jour pour l'équipe. Configure également `TIME_ZONE` avec le fuseau horaire du
 restaurant (par exemple `Europe/Paris`).
 
+### PostgreSQL partagé avec Supabase
+
+Pour éviter d'installer PostgreSQL sur chaque poste, crée un projet ou une
+branche Supabase dédiée au développement de l'équipe. Ne branche pas les
+ordinateurs des développeurs sur la branche marquée `PRODUCTION`. Dans Supabase,
+ouvre `Connect`, copie l'URI PostgreSQL (pas la clé publishable), puis remplace
+`DATABASE_URL` dans chaque fichier local `backend\.env`. Remplace le marqueur du
+mot de passe par le mot de passe de la base; n'ajoute jamais cette valeur à Git.
+
+Le mode `config.settings.development` utilise un cache et un channel layer en
+mémoire : Redis n'a donc pas besoin d'être installé pour le développement local
+avec un seul serveur Django. Les événements WebSocket ne sont alors ni partagés
+entre plusieurs processus ni persistants. La configuration de production
+continue d'utiliser Redis; un Redis hébergé sera nécessaire lors du déploiement.
+
+Django reste propriétaire du schéma : applique ses migrations uniquement sur
+la base Supabase de développement, après avoir vérifié l'URL configurée :
+
+```powershell
+python manage.py check
+python manage.py migrate
+```
+
+Ne lance pas `migrate` contre une branche ou un projet Supabase de production
+pour les besoins de développement. Les commandes `supabase init` et
+`supabase link` ne sont pas nécessaires pour connecter Django à PostgreSQL.
+
+### Images des plats avec Supabase Storage
+
+Dans le projet Supabase de développement, crée un bucket `dish-images` et
+active sa lecture publique pour que le menu puisse afficher les images sans
+connexion. Les écritures restent faites par Django côté serveur. Dans Storage,
+ouvre les réglages S3 et récupère l'endpoint, la région et les deux clés S3.
+Ces clés donnent un accès serveur complet à Storage : garde-les uniquement dans
+`backend\.env`, jamais dans le frontend, Git ou un message.
+
+Renseigne les six paramètres `SUPABASE_STORAGE_*` et `SUPABASE_S3_*` de
+`backend\.env.example`. L'endpoint S3 a la forme
+`https://<project-ref>.storage.supabase.co/storage/v1/s3`; l'URL publique de base
+a la forme `https://<project-ref>.supabase.co/storage/v1/object/public/dish-images`.
+Remplace `<project-ref>` par celui du projet de développement et utilise la
+région exacte indiquée par Supabase. Si tous les paramètres Storage restent
+vides, Django continue d'enregistrer localement dans `media/`. S'ils sont
+partiellement renseignés, Django refuse de démarrer pour éviter une configuration
+incomplète.
+
+Aucune migration de base n'est requise pour changer le stockage des fichiers.
+Les images déjà présentes dans `media/` doivent cependant être téléversées
+séparément dans le bucket.
+
 ## Initialisation et lancement
 
 Une fois PostgreSQL et Redis configurés et démarrés :
@@ -74,7 +123,7 @@ Depuis `backend\` :
 
 ```powershell
 python -m pytest -q
-ruff check .
+ruff check . --ignore RUF012,BLE001
 python manage.py check
 python manage.py makemigrations --check --dry-run
 ```
@@ -102,10 +151,18 @@ python -c "import subprocess, sys; result = subprocess.run([sys.executable, '-m'
 
 - `apps\accounts\` : utilisateur personnalisé à connexion par email, endpoints
   JWT, réinitialisation de mot de passe, invitation et gestion du personnel.
-- `apps\audit\` : modèle d'événement d'audit append-only et service d'écriture.
-- `apps\analytics\`, `core\`, `inventory\`, `kitchen\`, `locations\`, `menu\`,
-  `notifications\`, `orders\`, `payments\` et `production\` : squelettes
-  d'applications, à compléter.
+- `apps\core\` : réglages singleton du restaurant.
+- `apps\audit\` : journal append-only, filtrage des clés sensibles et lecture
+  réservée aux administrateurs.
+- `apps\menu\` et `apps\locations\` : catalogue privé, menu public, images et
+  emplacements.
+- `apps\orders\` et `apps\kitchen\` : commandes, transitions, idempotence,
+  file REST et notifications WebSocket avec ticket à usage unique.
+- `apps\payments\`, `apps\inventory\`, `apps\production\` et
+  `apps\analytics\` : encaissements/remboursements, stock/recettes, pertes,
+  indicateurs et prévisions.
+- `apps\notifications\` : configuration des notifications et événements de
+  cuisine publiés après validation des transactions.
 - `common\` : rôles et statuts partagés, modèle de base UUID, gestion uniforme
   des erreurs, pagination et permissions par rôle.
 - `config\settings\base.py` : configuration commune ; `development.py`,
@@ -126,8 +183,23 @@ Toutes les routes sont préfixées par `/api/v1/` :
 | `POST` | `/auth/password-reset/confirm/` | Public, limité en débit | Définir un nouveau mot de passe avec `uid` et `token` |
 | `GET` | `/staff/` | Administrateur | Lister le personnel |
 | `POST` | `/staff/` | Administrateur | Inviter un employé |
-| `GET` | `/staff/{uuid}/` | Administrateur | Lire un employé |
-| `PATCH` | `/staff/{uuid}/` | Administrateur | Modifier son rôle ou son activation |
+| `GET` / `PATCH` | `/staff/{uuid}/` | Administrateur | Lire ou modifier un employé |
+| `GET` / `PATCH` | `/settings/` | Tous / Administrateur | Lire ou modifier les réglages |
+| `GET` | `/audit/` | Administrateur | Lire les événements audités |
+| `GET` | `/public/menu/` | Public | Lire les plats publiés et disponibles |
+| `GET` / `POST` | `/categories/`, `/dishes/`, `/locations/` | Selon rôle | Gérer le menu et les emplacements |
+| `POST` | `/public/orders/` | Public | Créer une commande au prix serveur |
+| `GET` | `/public/track/{token}/` | Public avec jeton signé | Suivre une commande sans compte |
+| `GET` / `POST` | `/orders/` | Personnel autorisé | Lister, créer et faire évoluer les commandes |
+| `GET` / `POST` | `/kitchen/queue/`, `/kitchen/tickets/` | Cuisine | Lire la file et créer un ticket WebSocket |
+| `GET` / `POST` | `/orders/{id}/payments/` | Salle / responsables | Consulter et enregistrer un paiement |
+| `POST` | `/payments/{id}/refunds/`, `/refunds/{id}/process/` | Responsables | Demander et traiter un remboursement |
+| `GET` / `POST` | `/suppliers/`, `/ingredients/`, `/stock-lots/` | Selon rôle | Gérer fournisseurs, ingrédients et lots |
+| `GET` | `/stock-movements/`, `/inventory-alerts/` | Responsables | Lire mouvements et alertes |
+| `GET` / `POST` | `/production-batches/`, `/waste-declarations/` | Cuisine / responsables | Suivre la production et les pertes |
+| `GET` | `/analytics/overview/`, `/analytics/forecasts/` | Selon rôle | Lire les indicateurs et prévisions |
+| `GET` | `/health/` | Public | Vérifier PostgreSQL et Redis |
+| `GET` | `/schema/`, `/docs/` | Administrateur | Consulter le schéma OpenAPI et Swagger |
 
 Les accès JWT durent 10 minutes ; les jetons de rafraîchissement durent 7 jours
 et sont renouvelés avec liste de révocation. Les rôles métier sont `ADMIN`,
@@ -136,11 +208,19 @@ et sont renouvelés avec liste de révocation. Les rôles métier sont `ADMIN`,
 
 ## Points restant à faire
 
-- Démarrer PostgreSQL et Redis et appliquer les migrations sur une base
-  configurée ; ne pas supposer que la base locale ou son rôle PostgreSQL existent.
-- Construire le modèle et les migrations de chaque application métier.
-- Ajouter les permissions, services, endpoints et tests des domaines métier.
-- Définir et documenter les routes globales, le déploiement, la supervision et la
-  gestion des secrets de production.
+- Démarrer PostgreSQL et Redis, puis appliquer les migrations avec
+  `python manage.py migrate` ; ne pas supposer que la base locale ou son rôle
+  PostgreSQL existent.
+- Lancer `python manage.py seed_demo` avec `DEMO_PASSWORD` pour préparer les
+  comptes, le catalogue, les stocks et les historiques de démonstration. Hors
+  `DEBUG`, la commande exige explicitement `--force-demo`.
+- Générer et valider le schéma avec
+  `python manage.py spectacular --file schema.yml --validate --fail-on-warn`.
+- La CI GitHub exécute Ruff, les migrations, les tests, l'audit des dépendances
+  et la validation OpenAPI avec PostgreSQL et Redis.
+- Le script `scripts\backup.ps1` sauvegarde PostgreSQL et les médias dans
+  `BACKUP_DIR`; il ne supprime pas automatiquement les anciennes sauvegardes.
+- Lire [la procédure de déploiement, sauvegarde et restauration](docs/operations.md)
+  avant toute mise en production.
 - En environnement réel, remplacer le backend email console par un fournisseur
   configuré et surveillé.

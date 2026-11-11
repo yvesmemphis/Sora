@@ -1,9 +1,9 @@
 import logging
-from importlib import import_module
 import secrets
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
@@ -83,7 +83,7 @@ def _redeem_ticket(ticket_id):
 
 
 def publish_order_event(order_id, event_type, order_status):
-    channel_layer = import_module("channels.layers").get_channel_layer()
+    channel_layer = get_channel_layer()
     if channel_layer is None:
         return
     event = {

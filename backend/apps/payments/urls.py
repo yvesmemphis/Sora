@@ -5,7 +5,11 @@ from .views import OrderPaymentsView, PaymentRefundsView, RefundProcessView
 app_name = "payments"
 
 urlpatterns = [
-    path("orders/<int:order_id>/payments/", OrderPaymentsView.as_view(), name="order-payments"),
+    path(
+        "orders/<int:order_id>/payments/",
+        OrderPaymentsView.as_view(),
+        name="order-payments",
+    ),
     path(
         "payments/<int:payment_id>/refunds/",
         PaymentRefundsView.as_view(),

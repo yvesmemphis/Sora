@@ -1,8 +1,9 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .models import Payment, Refund
+from .models import Payment, Refund, reject_card_like
 
 
 class PaymentSerializer(serializers.ModelSerializer):
@@ -56,11 +57,21 @@ class PaymentCreateSerializer(serializers.Serializer):
     )
     reference = serializers.CharField(max_length=64, required=False, allow_blank=True)
 
+    def validate_reference(self, value):
+        try:
+            reject_card_like(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages) from exc
+        return value
+
     def to_internal_value(self, data):
         unknown = set(data) - set(self.fields)
         if unknown:
             raise serializers.ValidationError(
-                {field: "Champ non accepté; aucune donnée de carte ne doit être envoyée." for field in sorted(unknown)}
+                {
+                    field: "Champ non accepté; aucune donnée de carte ne doit être envoyée."
+                    for field in sorted(unknown)
+                }
             )
         return super().to_internal_value(data)
 
