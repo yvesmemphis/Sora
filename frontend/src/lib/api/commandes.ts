@@ -211,6 +211,7 @@ export function commandeDepuisApi(
     source: c.source,
     lignes,
     note: notes.length ? notes.join(" · ") : undefined,
+    noteCommande: c.notes?.trim() || undefined,
     historique,
   };
 }

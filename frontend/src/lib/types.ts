@@ -82,6 +82,8 @@ export interface Commande {
   source?: "PUBLIC" | "STAFF";
   lignes: LigneCommande[];
   note?: string;
+  /** Note de la commande seule (sans les instructions par plat). */
+  noteCommande?: string;
   historique: EvenementCommande[];
   /** Secondes écoulées depuis la confirmation (écran cuisine). */
   ecouleSec?: number;

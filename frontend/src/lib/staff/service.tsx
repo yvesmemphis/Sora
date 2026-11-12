@@ -96,12 +96,27 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const [erreurReseau, setErreurReseau] = useState<string | null>(null);
   const [erreurAction, setErreurAction] = useState<string | null>(null);
   const enCours = useRef(false);
+  /**
+   * Le rôle cuisine ne reçoit pas `updated_at` : on retient l'heure à laquelle
+   * chaque changement de statut a été observé, pour les minuteurs.
+   */
+  const vus = useRef(new Map<number, { statut: string; depuis: string }>());
+  const [depuis, setDepuis] = useState<Record<number, string>>({});
 
   const actualiser = useCallback(async () => {
     if (enCours.current) return;
     enCours.current = true;
     try {
       const liste = await listerCommandes();
+      const premierChargement = vus.current.size === 0;
+      const maintenant = new Date().toISOString();
+      for (const c of liste) {
+        const connu = vus.current.get(c.id);
+        if (!connu || connu.statut !== c.status) {
+          vus.current.set(c.id, { statut: c.status, depuis: c.updated_at ?? (premierChargement || !connu ? c.created_at : maintenant) });
+        }
+      }
+      setDepuis(Object.fromEntries([...vus.current].map(([id, v]) => [id, v.depuis])));
       setBrutes(liste);
       setActualiseLe(Date.now());
       setErreurReseau(null);
@@ -165,10 +180,13 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const commandes = useMemo(
     () =>
       brutes
-        .map((c) => commandeDepuisApi(c, { emplacements, payee: payees[c.id], paiement: modes[c.id] }))
+        .map((c) => ({
+          ...commandeDepuisApi(c, { emplacements, payee: payees[c.id], paiement: modes[c.id] }),
+          majLe: c.updated_at ?? depuis[c.id] ?? c.created_at,
+        }))
         .filter((c) => ACTIFS.includes(c.statut) || (c.creeeLe && estDuJour(c.creeeLe)))
         .sort((a, b) => (b.creeeLe ?? "").localeCompare(a.creeeLe ?? "")),
-    [brutes, emplacements, payees, modes],
+    [brutes, emplacements, payees, modes, depuis],
   );
 
   const parNumero = useCallback((numero: string) => commandes.find((c) => c.numero === numero), [commandes]);

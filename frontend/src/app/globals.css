@@ -112,3 +112,21 @@
     box-shadow: none !important;
   }
 }
+
+/* Écran cuisine : halo doux des commandes qui viennent d'arriver. */
+@keyframes halo-or {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(201 154 59 / 0);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgb(201 154 59 / 0.18);
+  }
+}
+
+@utility halo-nouvelle {
+  animation: halo-or 2.4s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
