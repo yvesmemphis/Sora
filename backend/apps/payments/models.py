@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 
+from common.constants import PAYMENT_METHOD_CHOICES
+
 
 def luhn_ok(digits):
     total = 0
@@ -32,15 +34,7 @@ class Payment(models.Model):
         ("FAILED", "Échoué"),
         ("REFUNDED", "Remboursé"),
     ]
-    METHOD_CHOICES = [
-        ("carte_bleue", "Carte"),
-        ("virement", "Virement"),
-        ("espece", "Espèces"),
-        ("card", "Card"),
-        ("cash", "Cash"),
-        ("bank_transfer", "Bank transfer"),
-        ("other", "Other"),
-    ]
+    METHOD_CHOICES = PAYMENT_METHOD_CHOICES
 
     order = models.ForeignKey(
         "orders.Order", on_delete=models.CASCADE, related_name="payments"

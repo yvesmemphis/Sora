@@ -28,6 +28,20 @@ def test_login_uses_same_error_for_unknown_or_wrong_password():
     assert wrong_password.json() == unknown_user.json()
 
 
+def test_login_updates_last_login():
+    user = UserFactory()
+    assert user.last_login is None
+
+    response = APIClient().post(
+        reverse("login"),
+        {"email": user.email, "password": "Str0ng-Pass-123!"},
+    )
+
+    assert response.status_code == 200
+    user.refresh_from_db()
+    assert user.last_login is not None
+
+
 def test_sixth_login_attempt_is_throttled():
     client = APIClient()
     for _ in range(5):

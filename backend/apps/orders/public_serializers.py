@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from common.constants import LocationType, OrderMode
+from common.constants import PAYMENT_METHOD_CHOICES, LocationType, OrderMode
 
 
 class OrderLineSerializer(serializers.Serializer):
@@ -17,6 +17,11 @@ class LocationRefSerializer(serializers.Serializer):
 class PublicOrderSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(choices=OrderMode.choices)
     location = LocationRefSerializer(required=False)
+    payment_method_expected = serializers.ChoiceField(
+        choices=PAYMENT_METHOD_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
     note = serializers.CharField(max_length=300, required=False, allow_blank=True)
     items = OrderLineSerializer(many=True, allow_empty=False)
 
@@ -29,6 +34,8 @@ class PublicOrderSerializer(serializers.Serializer):
 class PublicOrderResponseSerializer(serializers.Serializer):
     number = serializers.CharField()
     total = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField(max_length=3)
+    payment_method_expected = serializers.CharField(allow_blank=True)
     tracking_token = serializers.CharField()
 
 
@@ -40,5 +47,8 @@ class TrackItemSerializer(serializers.Serializer):
 class TrackOrderSerializer(serializers.Serializer):
     number = serializers.CharField()
     status = serializers.CharField()
+    payment_method_expected = serializers.CharField(allow_blank=True)
     created_at = serializers.DateTimeField()
+    total = serializers.DecimalField(max_digits=12, decimal_places=2)
+    currency = serializers.CharField(max_length=3)
     items = TrackItemSerializer(many=True)

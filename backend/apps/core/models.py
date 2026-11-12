@@ -5,6 +5,7 @@ class RestaurantSettings(models.Model):
     name = models.CharField(max_length=180, default="Mon restaurant")
     auto_confirm_orders = models.BooleanField(default=False)
     public_ordering_enabled = models.BooleanField(default=True)
+    withdrawal_delay_minutes = models.PositiveSmallIntegerField(default=5)
     expiry_alert_days = models.PositiveSmallIntegerField(default=3)
 
     def save(self, *args, **kwargs):

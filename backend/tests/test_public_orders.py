@@ -1,5 +1,9 @@
+from datetime import timedelta
+
 import pytest
+from django.test import override_settings
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.core.models import RestaurantSettings
@@ -7,6 +11,7 @@ from apps.kitchen.models import KitchenQueueItem
 from apps.locations.factories import LocationFactory
 from apps.menu.factories import DishFactory
 from apps.orders.models import Order
+from apps.orders.tracking import make_tracking_token
 
 pytestmark = pytest.mark.django_db
 
@@ -23,6 +28,7 @@ def test_public_order_uses_server_price_and_signed_tracking():
     dish = DishFactory(price="12.50")
     location = LocationFactory(type="TABLE", reference="T12")
     payload = public_order_payload(dish, location)
+    payload["payment_method_expected"] = "cash"
     payload["total"] = "0.01"
     client = APIClient()
 
@@ -30,11 +36,31 @@ def test_public_order_uses_server_price_and_signed_tracking():
 
     assert response.status_code == 201
     assert response.data["total"] == "25.00"
+    assert response.data["currency"] == "XOF"
+    assert response.data["payment_method_expected"] == "cash"
     tracked = client.get(
         reverse("orders:public-track", args=[response.data["tracking_token"]])
     )
     assert tracked.status_code == 200
+    assert tracked.data["currency"] == "XOF"
+    assert tracked.data["payment_method_expected"] == "cash"
+    assert tracked.data["total"] == "25.00"
     assert tracked.data["items"] == [{"name": dish.name, "quantity": 2}]
+
+
+@override_settings(ORDER_TAX_RATE="0.10")
+def test_public_order_applies_the_same_server_tax_rate():
+    dish = DishFactory(price="12.50")
+    location = LocationFactory(type="TABLE", reference="T14")
+
+    response = APIClient().post(
+        reverse("orders:public-order"),
+        public_order_payload(dish, location),
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["total"] == "27.50"
 
 
 def test_public_order_idempotency_replays_only_same_payload():
@@ -65,9 +91,74 @@ def test_public_order_idempotency_replays_only_same_payload():
     assert Order.objects.filter(idempotency_key="public-key-1").count() == 1
 
 
+def test_public_order_idempotency_includes_expected_payment_method():
+    dish = DishFactory()
+    location = LocationFactory(type="TABLE", reference="T15")
+    client = APIClient()
+    url = reverse("orders:public-order")
+    payload = public_order_payload(dish, location)
+    payload["payment_method_expected"] = "cash"
+
+    first = client.post(
+        url, payload, format="json", HTTP_IDEMPOTENCY_KEY="public-payment-key"
+    )
+    payload["payment_method_expected"] = "card"
+    changed = client.post(
+        url, payload, format="json", HTTP_IDEMPOTENCY_KEY="public-payment-key"
+    )
+
+    assert first.status_code == 201
+    assert changed.status_code == 409
+
+
 def test_public_track_rejects_forged_tokens():
     response = APIClient().get(reverse("orders:public-track", args=["bad.token"]))
     assert response.status_code == 404
+
+
+def test_client_can_cancel_public_order_within_withdrawal_window():
+    order = Order.objects.create(source="PUBLIC", status="RECEIVED")
+    response = APIClient().post(
+        reverse(
+            "orders:public-track-cancel",
+            args=[make_tracking_token(order)],
+        )
+    )
+
+    assert response.status_code == 204
+    order.refresh_from_db()
+    assert order.status == "CANCELLED"
+
+
+def test_client_cannot_cancel_public_order_after_withdrawal_window():
+    order = Order.objects.create(source="PUBLIC", status="RECEIVED")
+    Order.objects.filter(pk=order.pk).update(
+        created_at=timezone.now() - timedelta(minutes=6)
+    )
+    response = APIClient().post(
+        reverse(
+            "orders:public-track-cancel",
+            args=[make_tracking_token(order)],
+        )
+    )
+
+    assert response.status_code == 409
+    order.refresh_from_db()
+    assert order.status == "RECEIVED"
+
+
+def test_client_cannot_cancel_confirmed_public_order():
+    order = Order.objects.create(source="PUBLIC", status="CONFIRMED")
+    response = APIClient().post(
+        reverse(
+            "orders:public-track-cancel",
+            args=[make_tracking_token(order)],
+        )
+    )
+
+    assert response.status_code == 409
+    order.refresh_from_db()
+    assert order.status == "CONFIRMED"
 
 
 def test_auto_confirmed_public_order_enters_kitchen_queue():

@@ -65,12 +65,15 @@ class PublicOrderCreateView(APIView):
             mode=values["mode"],
             location=location,
             note=values.get("note", ""),
+            payment_method_expected=values.get("payment_method_expected", ""),
             idempotency_key=idempotency_key,
         )
         return Response(
             {
                 "number": order.number,
                 "total": str(order.total),
+                "currency": order.currency,
+                "payment_method_expected": order.payment_method_expected,
                 "tracking_token": make_tracking_token(order),
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -90,3 +93,17 @@ class PublicTrackView(APIView):
         response = Response(TrackOrderSerializer(order).data)
         response["Referrer-Policy"] = "no-referrer"
         return response
+
+
+class PublicTrackCancelView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "public_order"
+    public = True
+
+    @extend_schema(request=None, responses={204: None})
+    def post(self, request, token):
+        order = order_from_tracking_token(token)
+        services.cancel_public_order(order_id=order.pk)
+        return Response(status=status.HTTP_204_NO_CONTENT)

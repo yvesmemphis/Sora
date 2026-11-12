@@ -16,6 +16,7 @@ class SettingsSerializer(serializers.ModelSerializer):
             "name",
             "auto_confirm_orders",
             "public_ordering_enabled",
+            "withdrawal_delay_minutes",
             "expiry_alert_days",
         ]
 

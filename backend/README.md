@@ -183,16 +183,20 @@ Toutes les routes sont préfixées par `/api/v1/` :
 | `POST` | `/auth/password-reset/confirm/` | Public, limité en débit | Définir un nouveau mot de passe avec `uid` et `token` |
 | `GET` | `/staff/` | Administrateur | Lister le personnel |
 | `POST` | `/staff/` | Administrateur | Inviter un employé |
-| `GET` / `PATCH` | `/staff/{uuid}/` | Administrateur | Lire ou modifier un employé |
+| `GET` / `PATCH` | `/staff/{id}/` | Administrateur | Lire ou modifier un employé |
+| `POST` | `/staff/{id}/resend-invitation/` | Administrateur | Renvoyer l'invitation si le mot de passe n'est pas encore défini |
 | `GET` / `PATCH` | `/settings/` | Tous / Administrateur | Lire ou modifier les réglages |
-| `GET` | `/audit/` | Administrateur | Lire les événements audités |
-| `GET` | `/public/menu/` | Public | Lire les plats publiés et disponibles |
+| `GET` | `/audit/` | Administrateur | Lire les événements; filtrer avec `date_from`, `date_to`, `actor`, `module`, `action` ou `result` |
+| `GET` | `/public/menu/` | Public | Lire les plats publiés et leur disponibilité |
 | `GET` / `POST` | `/categories/`, `/dishes/`, `/locations/` | Selon rôle | Gérer le menu et les emplacements |
 | `POST` | `/public/orders/` | Public | Créer une commande au prix serveur |
 | `GET` | `/public/track/{token}/` | Public avec jeton signé | Suivre une commande sans compte |
-| `GET` / `POST` | `/orders/` | Personnel autorisé | Lister, créer et faire évoluer les commandes |
+| `POST` | `/public/track/{token}/cancel/` | Public avec jeton signé | Annuler une commande encore reçue dans le délai autorisé |
+| `GET` / `POST` | `/orders/` | Personnel autorisé | Filtrer, lister et créer les commandes |
+| `POST` / `PATCH` | `/orders/{id}/transition/`, `/orders/{id}/location/` | Personnel autorisé | Faire évoluer une commande ou modifier son emplacement avant la préparation |
 | `GET` / `POST` | `/kitchen/queue/`, `/kitchen/tickets/` | Cuisine | Lire la file et créer un ticket WebSocket |
 | `GET` / `POST` | `/orders/{id}/payments/` | Salle / responsables | Consulter et enregistrer un paiement |
+| `GET` | `/payments/?date=AAAA-MM-JJ` | Administrateur / gestionnaire | Lister les paiements du jour et agréger les encaissements/remboursements par moyen et devise |
 | `POST` | `/payments/{id}/refunds/`, `/refunds/{id}/process/` | Responsables | Demander et traiter un remboursement |
 | `GET` / `POST` | `/suppliers/`, `/ingredients/`, `/stock-lots/` | Selon rôle | Gérer fournisseurs, ingrédients et lots |
 | `GET` | `/stock-movements/`, `/inventory-alerts/` | Responsables | Lire mouvements et alertes |
@@ -204,7 +208,20 @@ Toutes les routes sont préfixées par `/api/v1/` :
 Les accès JWT durent 10 minutes ; les jetons de rafraîchissement durent 7 jours
 et sont renouvelés avec liste de révocation. Les rôles métier sont `ADMIN`,
 `MANAGER`, `WAITER` et `KITCHEN`. L'API du personnel est actuellement réservée à
-`ADMIN`.
+`ADMIN`. Le délai d'annulation client est configurable avec
+`withdrawal_delay_minutes` dans les réglages (5 minutes par défaut) ; seules les
+commandes publiques encore au statut `RECEIVED` peuvent être annulées ainsi.
+Les nouvelles commandes et leurs paiements utilisent le XOF par défaut ; la
+migration de devise conserve en EUR les commandes déjà enregistrées sans devise.
+Les chiffres d'affaires de l'aperçu restent regroupés par devise.
+La liste des commandes conserve son format historique par défaut ; `status`,
+`date` et `created_after` filtrent les résultats, et `page` ou `page_size`
+active une réponse paginée. Le menu public indique aussi `is_available` et
+`preparation_time` pour les plats publiés, y compris ceux qui sont momentanément
+indisponibles. Une commande peut contenir `payment_method_expected` avec un
+moyen déjà reconnu par l'API; l'emplacement est modifiable uniquement avant
+le début de la préparation. Les rapports de paiements séparent toujours les
+devises et soustraient les remboursements traités à la date demandée.
 
 ## Points restant à faire
 

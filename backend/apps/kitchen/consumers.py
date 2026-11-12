@@ -46,23 +46,18 @@ class KitchenConsumer(AsyncWebsocketConsumer):
         await self.close(code=1008)
 
     async def order_created(self, event):
-        await self.send(
-            text_data=json.dumps(
-                {
-                    "type": "order.created",
-                    "order_id": event["order_id"],
-                    "status": event["status"],
-                }
-            )
-        )
+        await self._send_order_event(event, "order.created")
 
     async def order_status_changed(self, event):
-        await self.send(
-            text_data=json.dumps(
-                {
-                    "type": "order.status_changed",
-                    "order_id": event["order_id"],
-                    "status": event["status"],
-                }
-            )
-        )
+        await self._send_order_event(event, "order.status_changed")
+
+    async def _send_order_event(self, event, event_type):
+        payload = {
+            "type": event_type,
+            "order_id": event["order_id"],
+            "status": event["status"],
+        }
+        for field in ("number", "location_type", "location_reference"):
+            if field in event:
+                payload[field] = event[field]
+        await self.send(text_data=json.dumps(payload))

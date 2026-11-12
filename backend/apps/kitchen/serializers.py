@@ -22,7 +22,14 @@ class KitchenQueueItemSerializer(serializers.ModelSerializer):
     """
 
     order_number = serializers.SerializerMethodField()
+    order_id = serializers.IntegerField(read_only=True)
     table_number = serializers.IntegerField(source="order.table_number", read_only=True)
+    location_type = serializers.CharField(
+        source="order.location.type", read_only=True, allow_null=True
+    )
+    location_reference = serializers.CharField(
+        source="order.location.reference", read_only=True, allow_null=True
+    )
     items = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.CharField())
@@ -38,8 +45,11 @@ class KitchenQueueItemSerializer(serializers.ModelSerializer):
         model = KitchenQueueItem
         fields = [
             "id",
+            "order_id",
             "order_number",
             "table_number",
+            "location_type",
+            "location_reference",
             "items",
             "status",
             "created_at",

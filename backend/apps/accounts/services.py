@@ -13,7 +13,7 @@ from common.exceptions import DomainError
 User = get_user_model()
 
 
-def send_password_email(user, invited):
+def send_password_email(user, invited, *, fail_silently=True):
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
     link = f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
@@ -27,7 +27,7 @@ def send_password_email(user, invited):
         f"Cliquez pour définir votre mot de passe (valable 1 heure) : {link}",
         None,
         [user.email],
-        fail_silently=True,
+        fail_silently=fail_silently,
     )
 
 
@@ -51,6 +51,34 @@ def invite_staff(*, actor, email, role, first_name="", last_name=""):
     )
     transaction.on_commit(lambda: send_password_email(user, invited=True))
     return user
+
+
+@transaction.atomic
+def resend_staff_invitation(*, target, actor):
+    try:
+        target = User.objects.select_for_update().get(pk=target.pk)
+    except User.DoesNotExist:
+        raise DomainError("staff_not_found", "Employé introuvable.", 404) from None
+    if not target.is_active:
+        raise DomainError(
+            "staff_inactive", "Impossible d'inviter un compte désactivé.", 409
+        )
+    if target.has_usable_password():
+        raise DomainError(
+            "invitation_not_pending",
+            "Cet employé a déjà défini son mot de passe.",
+            409,
+        )
+    audit.log(
+        actor=actor,
+        action="staff.invitation_resent",
+        resource=target,
+        metadata={"role": target.role},
+    )
+    transaction.on_commit(
+        lambda: send_password_email(target, invited=True, fail_silently=False)
+    )
+    return target
 
 
 @transaction.atomic

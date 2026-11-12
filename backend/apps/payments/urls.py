@@ -1,10 +1,16 @@
 from django.urls import path
 
-from .views import OrderPaymentsView, PaymentRefundsView, RefundProcessView
+from .views import (
+    OrderPaymentsView,
+    PaymentDailyReportView,
+    PaymentRefundsView,
+    RefundProcessView,
+)
 
 app_name = "payments"
 
 urlpatterns = [
+    path("payments/", PaymentDailyReportView.as_view(), name="payment-daily-report"),
     path(
         "orders/<int:order_id>/payments/",
         OrderPaymentsView.as_view(),

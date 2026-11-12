@@ -25,6 +25,8 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 class StaffSerializer(serializers.ModelSerializer):
+    is_invited = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields: ClassVar[list[str]] = [
@@ -34,8 +36,12 @@ class StaffSerializer(serializers.ModelSerializer):
             "last_name",
             "role",
             "is_active",
+            "is_invited",
         ]
         read_only_fields: ClassVar[list[str]] = ["id", "is_active"]
+
+    def get_is_invited(self, obj) -> bool:
+        return not obj.has_usable_password()
 
 
 class StaffInviteSerializer(serializers.Serializer):

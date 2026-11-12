@@ -23,6 +23,8 @@ class PublicDishSerializer(serializers.ModelSerializer):
             "allergens",
             "image",
             "category",
+            "is_available",
+            "preparation_time",
         ]
 
 
@@ -45,7 +47,6 @@ class PublicMenuView(APIView):
         dishes = (
             Dish.objects.filter(
                 is_published=True,
-                is_available=True,
                 category__is_active=True,
             )
             .select_related("category")
