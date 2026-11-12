@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
@@ -90,6 +92,7 @@ class Order(models.Model):
         choices=PAYMENT_METHOD_CHOICES,
         blank=True,
     )
+    withdrawal_delay_minutes = models.PositiveSmallIntegerField(default=5)
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -124,6 +127,18 @@ class Order(models.Model):
     def get_total(self):
         """Retourne le total TTC de la commande."""
         return self.total
+
+    @property
+    def withdrawal_deadline(self):
+        return self.created_at + timedelta(minutes=self.withdrawal_delay_minutes)
+
+    @property
+    def can_cancel(self):
+        return (
+            self.source == "PUBLIC"
+            and self.status == "RECEIVED"
+            and timezone.now() <= self.withdrawal_deadline
+        )
 
 
 class OrderItem(models.Model):

@@ -38,6 +38,9 @@ def test_login_updates_last_login():
     )
 
     assert response.status_code == 200
+    assert "refresh" not in response.data
+    cookie = response.cookies["sora_refresh"]
+    assert cookie["httponly"]
     user.refresh_from_db()
     assert user.last_login is not None
 
@@ -56,14 +59,58 @@ def test_sixth_login_attempt_is_throttled():
 def test_refresh_is_refused_after_logout():
     user = UserFactory()
     client = APIClient()
-    tokens = client.post(
+    login = client.post(
         reverse("login"),
         {"email": user.email, "password": "Str0ng-Pass-123!"},
-    ).json()
-    client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
+    )
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
 
-    assert client.post(reverse("logout"), {"refresh": tokens["refresh"]}).status_code == 204
-    assert client.post(reverse("refresh"), {"refresh": tokens["refresh"]}).status_code == 401
+    assert client.post(reverse("logout")).status_code == 204
+    assert client.post(reverse("refresh")).status_code == 401
+
+
+def test_refresh_rotates_http_only_cookie_without_returning_refresh_token():
+    user = UserFactory()
+    client = APIClient()
+    login = client.post(
+        reverse("login"),
+        {"email": user.email, "password": "Str0ng-Pass-123!"},
+    )
+
+    refreshed = client.post(reverse("refresh"))
+
+    assert login.status_code == 200
+    assert refreshed.status_code == 200
+    assert "refresh" not in refreshed.data
+    assert refreshed.cookies["sora_refresh"]["httponly"]
+
+
+def test_cookie_refresh_requires_csrf_header():
+    user = UserFactory()
+    client = APIClient(enforce_csrf_checks=True)
+    login = client.post(
+        reverse("login"),
+        {"email": user.email, "password": "Str0ng-Pass-123!"},
+    )
+
+    rejected = client.post(reverse("refresh"))
+    csrf_token = client.cookies["csrftoken"].value
+    accepted = client.post(
+        reverse("refresh"),
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+    rejected_logout = client.post(reverse("logout"))
+    accepted_logout = client.post(
+        reverse("logout"),
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert login.status_code == 200
+    assert rejected.status_code == 403
+    assert accepted.status_code == 200
+    assert rejected_logout.status_code == 403
+    assert accepted_logout.status_code == 204
 
 
 def test_password_reset_request_does_not_reveal_unknown_account():

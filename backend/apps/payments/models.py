@@ -2,6 +2,7 @@
 
 import re
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -52,7 +53,7 @@ class Payment(models.Model):
     payment_method = models.CharField(
         max_length=50,
         choices=METHOD_CHOICES,
-        help_text="Ex: carte_bleue, virement, espece",
+        help_text="Canonical payment method code.",
     )
     card_last_four = models.CharField(
         max_length=4,
@@ -143,6 +144,29 @@ class Refund(models.Model):
         return self.status == "COMPLETED"
 
 
+class CashRegisterClosure(models.Model):
+    closed_for = models.DateField()
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="cash_register_closures",
+    )
+    expected_totals = models.JSONField(default=list)
+    expected_cash = models.JSONField(default=dict)
+    counted_cash = models.JSONField(default=dict)
+    closed_at = models.DateTimeField(auto_now_add=True)
+    notes = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-closed_for", "-closed_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("closed_for", "closed_by"),
+                name="payments_cash_closure_per_user_day",
+            )
+        ]
+
+
 class PaymentFactory:
     """Factory simple pour les tests de paiement (non Django factory)."""
 
@@ -153,8 +177,8 @@ class PaymentFactory:
             order=order,
             amount=amount,
             status=status,
-            currency="EUR",
-            payment_method="carte_bleue",
+            currency=order.currency,
+            payment_method="card",
             reference=f"ref_{order.id}_{amount}",
             **kwargs,
         )

@@ -24,6 +24,7 @@ class PublicDishSerializer(serializers.ModelSerializer):
             "image",
             "category",
             "is_available",
+            "availability_status",
             "preparation_time",
         ]
 
@@ -31,6 +32,10 @@ class PublicDishSerializer(serializers.ModelSerializer):
 class PublicMenuResponseSerializer(serializers.Serializer):
     name = serializers.CharField()
     ordering_enabled = serializers.BooleanField()
+    withdrawal_delay_minutes = serializers.IntegerField()
+    opening_hours = serializers.JSONField()
+    accepted_payment_methods = serializers.ListField(child=serializers.CharField())
+    currency = serializers.CharField()
     dishes = PublicDishSerializer(many=True)
 
 
@@ -56,6 +61,10 @@ class PublicMenuView(APIView):
             {
                 "name": settings.name,
                 "ordering_enabled": settings.public_ordering_enabled,
+                "withdrawal_delay_minutes": settings.withdrawal_delay_minutes,
+                "opening_hours": settings.opening_hours,
+                "accepted_payment_methods": settings.accepted_payment_methods,
+                "currency": settings.currency,
                 "dishes": PublicDishSerializer(
                     dishes, many=True, context={"request": request}
                 ).data,

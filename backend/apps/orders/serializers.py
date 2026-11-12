@@ -4,7 +4,8 @@ from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from apps.locations.models import Location
-from common.constants import PAYMENT_METHOD_CHOICES, OrderMode
+from common.constants import OrderMode
+from common.serializers import PaymentMethodField
 
 from .models import ORDER_STATUS_CHOICES, Order, OrderItem, OrderStatusHistory
 
@@ -40,6 +41,7 @@ class OrderStatusHistorySerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
+    payment_method_expected = PaymentMethodField(required=False, allow_blank=True)
     items = OrderItemSerializer(many=True, read_only=True)
     location_type = serializers.CharField(
         source="location.type", read_only=True, allow_null=True
@@ -161,11 +163,7 @@ class OrderCreateSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(
         choices=OrderMode.choices, required=False, default=OrderMode.TAKEAWAY
     )
-    payment_method_expected = serializers.ChoiceField(
-        choices=PAYMENT_METHOD_CHOICES,
-        required=False,
-        allow_blank=True,
-    )
+    payment_method_expected = PaymentMethodField(required=False, allow_blank=True)
     location = serializers.PrimaryKeyRelatedField(
         queryset=Location.objects.filter(is_active=True),
         required=False,

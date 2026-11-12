@@ -1,22 +1,24 @@
-from collections import defaultdict
-from decimal import Decimal
-
-from django.db.models import Sum
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.audit import services as audit
 from apps.orders.models import Order
 from apps.orders.services import waiter_can_access_order
 from common.constants import FRONT_OF_HOUSE, MANAGERS, Role
 from common.permissions import RolePermission
 
 from . import services
-from .models import Payment, Refund
+from .models import CashRegisterClosure, Payment
 from .serializers import (
+    CashRegisterClosureCreateSerializer,
+    CashRegisterClosureQuerySerializer,
+    CashRegisterClosureSerializer,
     PaymentCreateSerializer,
     PaymentDailyQuerySerializer,
     PaymentDailyReportSerializer,
@@ -113,49 +115,83 @@ class PaymentDailyReportView(APIView):
         payments = Payment.objects.filter(
             created_at__date=target_date
         ).select_related("order")
-        totals = defaultdict(
-            lambda: {"gross_collected": Decimal("0.00"), "refunded": Decimal("0.00")}
-        )
-        payment_totals = (
-            Payment.objects.filter(
-                created_at__date=target_date,
-                status__in=["CONFIRMED", "REFUNDED"],
-            )
-            .values("payment_method", "currency")
-            .annotate(total=Sum("amount"))
-        )
-        for row in payment_totals:
-            key = (row["payment_method"], row["currency"])
-            totals[key]["gross_collected"] = row["total"] or Decimal("0.00")
-
-        refund_totals = (
-            Refund.objects.filter(
-                status="COMPLETED",
-                processed_at__date=target_date,
-            )
-            .values("payment__payment_method", "payment__currency")
-            .annotate(total=Sum("amount"))
-        )
-        for row in refund_totals:
-            key = (row["payment__payment_method"], row["payment__currency"])
-            totals[key]["refunded"] = row["total"] or Decimal("0.00")
-
-        total_rows = [
-            {
-                "payment_method": method,
-                "currency": currency,
-                "gross_collected": values["gross_collected"],
-                "refunded": values["refunded"],
-                "net_collected": values["gross_collected"] - values["refunded"],
-            }
-            for (method, currency), values in sorted(totals.items())
-        ]
+        total_rows = services.payment_totals_for_date(target_date)
         return Response(
             {
                 "date": target_date,
                 "payments": PaymentSerializer(payments, many=True).data,
                 "totals": PaymentDailyTotalSerializer(total_rows, many=True).data,
             }
+        )
+
+
+class CashRegisterClosureView(APIView):
+    permission_classes = [RolePermission]
+    role_map = {"*": MANAGERS}
+
+    @extend_schema(
+        parameters=[CashRegisterClosureQuerySerializer],
+        responses=CashRegisterClosureSerializer(many=True),
+    )
+    def get(self, request):
+        target_date = request.query_params.get("date")
+        closures = CashRegisterClosure.objects.select_related("closed_by")
+        if target_date:
+            query = CashRegisterClosureQuerySerializer(data={"date": target_date})
+            query.is_valid(raise_exception=True)
+            closures = closures.filter(closed_for=query.validated_data["date"])
+        return Response(CashRegisterClosureSerializer(closures, many=True).data)
+
+    @extend_schema(
+        request=CashRegisterClosureCreateSerializer,
+        responses={201: CashRegisterClosureSerializer},
+    )
+    def post(self, request):
+        serializer = CashRegisterClosureCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        target_date = values.get("closed_for", timezone.localdate())
+        totals = services.payment_totals_for_date(target_date)
+        expected_cash = {
+            row["currency"]: str(row["net_collected"])
+            for row in totals
+            if row["payment_method"] == "cash"
+        }
+        try:
+            with transaction.atomic():
+                closure = CashRegisterClosure.objects.create(
+                    closed_for=target_date,
+                    closed_by=request.user,
+                    expected_totals=[
+                        {
+                            **row,
+                            "gross_collected": str(row["gross_collected"]),
+                            "refunded": str(row["refunded"]),
+                            "net_collected": str(row["net_collected"]),
+                        }
+                        for row in totals
+                    ],
+                    expected_cash=expected_cash,
+                    counted_cash={
+                        currency: str(amount)
+                        for currency, amount in values["counted_cash"].items()
+                    },
+                    notes=values.get("notes", ""),
+                )
+        except IntegrityError:
+            return Response(
+                {"detail": "Une clôture existe déjà pour cet utilisateur et cette date."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        audit.log(
+            actor=request.user,
+            action="payment.cash_register_closed",
+            resource=closure,
+            metadata={"closed_for": target_date.isoformat()},
+        )
+        return Response(
+            CashRegisterClosureSerializer(closure).data,
+            status=status.HTTP_201_CREATED,
         )
 
 

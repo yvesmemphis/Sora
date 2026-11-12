@@ -1,3 +1,9 @@
+from io import BytesIO
+
+import qrcode
+from django.http import HttpResponse
+from django.urls import reverse
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
@@ -74,6 +80,7 @@ class PublicOrderCreateView(APIView):
                 "total": str(order.total),
                 "currency": order.currency,
                 "payment_method_expected": order.payment_method_expected,
+                "withdrawal_delay_minutes": order.withdrawal_delay_minutes,
                 "tracking_token": make_tracking_token(order),
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -92,6 +99,30 @@ class PublicTrackView(APIView):
         order = order_from_tracking_token(token)
         response = Response(TrackOrderSerializer(order).data)
         response["Referrer-Policy"] = "no-referrer"
+        return response
+
+
+class PublicTrackQrView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "public_track"
+    public = True
+
+    @extend_schema(responses={(200, "image/png"): OpenApiTypes.BINARY})
+    def get(self, request, token):
+        order_from_tracking_token(token)
+        target_url = request.build_absolute_uri(
+            reverse("orders:public-track", args=[token])
+        )
+        image = qrcode.make(target_url)
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        response = HttpResponse(buffer.getvalue(), content_type="image/png")
+        response["Content-Disposition"] = 'inline; filename="order-tracking-qr.png"'
+        response["Cache-Control"] = "no-store"
+        response["Referrer-Policy"] = "no-referrer"
+        response["X-QR-Target"] = target_url
         return response
 
 

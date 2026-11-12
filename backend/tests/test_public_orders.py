@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 import pytest
+from django.core.management import call_command
 from django.test import override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -38,14 +39,40 @@ def test_public_order_uses_server_price_and_signed_tracking():
     assert response.data["total"] == "25.00"
     assert response.data["currency"] == "XOF"
     assert response.data["payment_method_expected"] == "cash"
+    assert response.data["withdrawal_delay_minutes"] == 5
     tracked = client.get(
         reverse("orders:public-track", args=[response.data["tracking_token"]])
     )
     assert tracked.status_code == 200
     assert tracked.data["currency"] == "XOF"
     assert tracked.data["payment_method_expected"] == "cash"
+    assert tracked.data["withdrawal_delay_minutes"] == 5
+    assert tracked.data["can_cancel"] is True
     assert tracked.data["total"] == "25.00"
     assert tracked.data["items"] == [{"name": dish.name, "quantity": 2}]
+
+
+def test_public_order_stores_configured_delay_and_normalizes_legacy_payment_code():
+    settings = RestaurantSettings.load()
+    settings.withdrawal_delay_minutes = 11
+    settings.accepted_payment_methods = ["cash"]
+    settings.save()
+    dish = DishFactory()
+
+    response = APIClient().post(
+        reverse("orders:public-order"),
+        {
+            "mode": "TAKEAWAY",
+            "payment_method_expected": "espece",
+            "items": [{"dish_id": str(dish.pk), "quantity": 1}],
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["payment_method_expected"] == "cash"
+    assert response.data["withdrawal_delay_minutes"] == 11
+    assert Order.objects.get().withdrawal_delay_minutes == 11
 
 
 @override_settings(ORDER_TAX_RATE="0.10")
@@ -116,6 +143,18 @@ def test_public_track_rejects_forged_tokens():
     assert response.status_code == 404
 
 
+def test_public_tracking_qr_encodes_the_signed_tracking_url():
+    order = Order.objects.create(source="PUBLIC", status="RECEIVED")
+    response = APIClient().get(
+        reverse("orders:public-track-qr", args=[make_tracking_token(order)])
+    )
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert "/public/track/" in response["X-QR-Target"]
+
+
 def test_client_can_cancel_public_order_within_withdrawal_window():
     order = Order.objects.create(source="PUBLIC", status="RECEIVED")
     response = APIClient().post(
@@ -161,7 +200,7 @@ def test_client_cannot_cancel_confirmed_public_order():
     assert order.status == "CONFIRMED"
 
 
-def test_auto_confirmed_public_order_enters_kitchen_queue():
+def test_auto_confirmed_public_order_waits_for_withdrawal_deadline():
     dish = DishFactory()
     settings = RestaurantSettings.load()
     settings.auto_confirm_orders = True
@@ -177,4 +216,16 @@ def test_auto_confirmed_public_order_enters_kitchen_queue():
     )
 
     assert response.status_code == 201
+    assert response.data["withdrawal_delay_minutes"] == 5
+    order = Order.objects.get()
+    assert order.status == "RECEIVED"
+    assert not KitchenQueueItem.objects.exists()
+
+    Order.objects.filter(pk=order.pk).update(
+        created_at=timezone.now() - timedelta(minutes=6)
+    )
+    assert call_command("process_public_order_timeouts") is None
+
+    order.refresh_from_db()
+    assert order.status == "CONFIRMED"
     assert KitchenQueueItem.objects.get().status == "CONFIRMED"

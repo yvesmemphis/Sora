@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
-from common.constants import PAYMENT_METHOD_CHOICES, LocationType, OrderMode
+from common.constants import LocationType, OrderMode
+from common.serializers import PaymentMethodField
 
 
 class OrderLineSerializer(serializers.Serializer):
@@ -17,11 +18,7 @@ class LocationRefSerializer(serializers.Serializer):
 class PublicOrderSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(choices=OrderMode.choices)
     location = LocationRefSerializer(required=False)
-    payment_method_expected = serializers.ChoiceField(
-        choices=PAYMENT_METHOD_CHOICES,
-        required=False,
-        allow_blank=True,
-    )
+    payment_method_expected = PaymentMethodField(required=False, allow_blank=True)
     note = serializers.CharField(max_length=300, required=False, allow_blank=True)
     items = OrderLineSerializer(many=True, allow_empty=False)
 
@@ -36,6 +33,7 @@ class PublicOrderResponseSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=12, decimal_places=2)
     currency = serializers.CharField(max_length=3)
     payment_method_expected = serializers.CharField(allow_blank=True)
+    withdrawal_delay_minutes = serializers.IntegerField()
     tracking_token = serializers.CharField()
 
 
@@ -49,6 +47,9 @@ class TrackOrderSerializer(serializers.Serializer):
     status = serializers.CharField()
     payment_method_expected = serializers.CharField(allow_blank=True)
     created_at = serializers.DateTimeField()
+    withdrawal_delay_minutes = serializers.IntegerField()
+    withdrawal_deadline = serializers.DateTimeField()
+    can_cancel = serializers.BooleanField()
     total = serializers.DecimalField(max_digits=12, decimal_places=2)
     currency = serializers.CharField(max_length=3)
     items = TrackItemSerializer(many=True)
