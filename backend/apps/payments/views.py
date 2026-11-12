@@ -1,18 +1,26 @@
+from collections import defaultdict
+from decimal import Decimal
+
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.orders.models import Order
+from apps.orders.services import waiter_can_access_order
 from common.constants import FRONT_OF_HOUSE, MANAGERS, Role
 from common.permissions import RolePermission
 
 from . import services
-from .models import Payment
+from .models import Payment, Refund
 from .serializers import (
     PaymentCreateSerializer,
+    PaymentDailyQuerySerializer,
+    PaymentDailyReportSerializer,
+    PaymentDailyTotalSerializer,
     PaymentSerializer,
     PaymentSummarySerializer,
     RefundCreateSerializer,
@@ -29,7 +37,7 @@ def _require_roles(user, roles):
 def _can_access_order(user, order):
     if user.role in MANAGERS:
         return True
-    return user.role == Role.WAITER and order.created_by_id == user.pk
+    return user.role == Role.WAITER and waiter_can_access_order(order, user)
 
 
 class OrderPaymentsView(APIView):
@@ -74,6 +82,80 @@ class OrderPaymentsView(APIView):
         return Response(
             serializer_class(payment).data,
             status=status.HTTP_201_CREATED,
+        )
+
+
+class PaymentDailyReportView(APIView):
+    permission_classes = [RolePermission]
+    role_map = {"*": MANAGERS}
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "date",
+                str,
+                OpenApiParameter.QUERY,
+                required=True,
+                description="Date des paiements à consulter, au format AAAA-MM-JJ.",
+            ),
+        ],
+        responses=PaymentDailyReportSerializer,
+        description=(
+            "Retourne les paiements créés à la date demandée et les montants "
+            "encaissés/remboursés regroupés par mode et devise."
+        ),
+    )
+    def get(self, request):
+        query = PaymentDailyQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        target_date = query.validated_data["date"]
+
+        payments = Payment.objects.filter(
+            created_at__date=target_date
+        ).select_related("order")
+        totals = defaultdict(
+            lambda: {"gross_collected": Decimal("0.00"), "refunded": Decimal("0.00")}
+        )
+        payment_totals = (
+            Payment.objects.filter(
+                created_at__date=target_date,
+                status__in=["CONFIRMED", "REFUNDED"],
+            )
+            .values("payment_method", "currency")
+            .annotate(total=Sum("amount"))
+        )
+        for row in payment_totals:
+            key = (row["payment_method"], row["currency"])
+            totals[key]["gross_collected"] = row["total"] or Decimal("0.00")
+
+        refund_totals = (
+            Refund.objects.filter(
+                status="COMPLETED",
+                processed_at__date=target_date,
+            )
+            .values("payment__payment_method", "payment__currency")
+            .annotate(total=Sum("amount"))
+        )
+        for row in refund_totals:
+            key = (row["payment__payment_method"], row["payment__currency"])
+            totals[key]["refunded"] = row["total"] or Decimal("0.00")
+
+        total_rows = [
+            {
+                "payment_method": method,
+                "currency": currency,
+                "gross_collected": values["gross_collected"],
+                "refunded": values["refunded"],
+                "net_collected": values["gross_collected"] - values["refunded"],
+            }
+            for (method, currency), values in sorted(totals.items())
+        ]
+        return Response(
+            {
+                "date": target_date,
+                "payments": PaymentSerializer(payments, many=True).data,
+                "totals": PaymentDailyTotalSerializer(total_rows, many=True).data,
+            }
         )
 
 

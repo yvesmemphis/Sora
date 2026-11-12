@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.accounts.factories import UserFactory
+from apps.locations.factories import LocationFactory
 from apps.orders.models import Order
 from apps.orders.services import transition_order
 from common.constants import OrderStatus, Role
@@ -31,7 +32,12 @@ def test_kitchen_ticket_endpoint_requires_kitchen_role():
 
 def test_queue_resync_uses_updated_after_and_minimal_data():
     kitchen_user = UserFactory(role=Role.KITCHEN)
-    order = Order.objects.create(status="PREPARING", customer_name="Private name")
+    location = LocationFactory(type="TABLE", reference="T6")
+    order = Order.objects.create(
+        status="PREPARING",
+        customer_name="Private name",
+        location=location,
+    )
     KitchenQueueItem.objects.create(order=order, status="PREPARING")
     client = APIClient()
     client.force_authenticate(kitchen_user)
@@ -43,7 +49,11 @@ def test_queue_resync_uses_updated_after_and_minimal_data():
 
     assert response.status_code == 200
     result = response.json()[0]
+    assert result["order_id"] == order.pk
     assert result["order_number"] == str(order.pk)
+    assert result["location_type"] == "TABLE"
+    assert result["location_reference"] == "T6"
+    assert result["updated_at"]
     assert "customer_name" not in result
     assert "unit_price" not in json.dumps(result)
 
@@ -105,6 +115,9 @@ def test_websocket_ticket_is_single_use_and_broadcasts_minimal_event():
                 "type": "order.created",
                 "order_id": "42",
                 "status": "RECEIVED",
+                "number": "261112-0001",
+                "location_type": "TABLE",
+                "location_reference": "T6",
                 "total": "secret",
             },
         )
@@ -113,6 +126,9 @@ def test_websocket_ticket_is_single_use_and_broadcasts_minimal_event():
             "type": "order.created",
             "order_id": "42",
             "status": "RECEIVED",
+            "number": "261112-0001",
+            "location_type": "TABLE",
+            "location_reference": "T6",
         }
         await communicator.disconnect()
 
@@ -124,6 +140,36 @@ def test_websocket_ticket_is_single_use_and_broadcasts_minimal_event():
         assert not accepted
 
     asyncio.run(run())
+
+
+def test_published_websocket_event_adds_order_location_only(monkeypatch):
+    class RecordingLayer:
+        def __init__(self):
+            self.event = None
+
+        async def group_send(self, group, event):
+            self.event = (group, event)
+
+    layer = RecordingLayer()
+    monkeypatch.setattr("apps.kitchen.services.get_channel_layer", lambda: layer)
+    location = LocationFactory(type="ROOM", reference="204")
+    order = Order.objects.create(number="261112-0002", location=location)
+
+    publish_order_event(
+        order.pk,
+        "order.created",
+        "RECEIVED",
+        number=order.number,
+        location_type=location.type,
+        location_reference=location.reference,
+    )
+
+    group, event = layer.event
+    assert group == "kitchen_broadcast"
+    assert event["number"] == "261112-0002"
+    assert event["location_type"] == "ROOM"
+    assert event["location_reference"] == "204"
+    assert "total" not in event
 
 
 def test_websocket_without_ticket_is_rejected():

@@ -82,7 +82,15 @@ def _redeem_ticket(ticket_id):
     return user_id
 
 
-def publish_order_event(order_id, event_type, order_status):
+def publish_order_event(
+    order_id,
+    event_type,
+    order_status,
+    *,
+    number=None,
+    location_type=None,
+    location_reference=None,
+):
     channel_layer = get_channel_layer()
     if channel_layer is None:
         return
@@ -90,6 +98,9 @@ def publish_order_event(order_id, event_type, order_status):
         "type": event_type.replace(".", "_"),
         "order_id": str(order_id),
         "status": str(order_status),
+        "number": str(number or order_id),
+        "location_type": location_type,
+        "location_reference": location_reference,
     }
     try:
         async_to_sync(channel_layer.group_send)("kitchen_broadcast", event)

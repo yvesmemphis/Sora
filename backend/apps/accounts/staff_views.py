@@ -23,6 +23,7 @@ class StaffViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericView
         "retrieve": {Role.ADMIN},
         "create": {Role.ADMIN},
         "partial_update": {Role.ADMIN},
+        "resend_invitation": {Role.ADMIN},
     }
     auth_view = True
 
@@ -42,3 +43,8 @@ class StaffViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, GenericView
             **serializer.validated_data,
         )
         return Response(StaffSerializer(user).data)
+
+    def resend_invitation(self, request, pk=None):
+        target = self.get_object()
+        user = services.resend_staff_invitation(target=target, actor=request.user)
+        return Response(StaffSerializer(user).data, status=202)

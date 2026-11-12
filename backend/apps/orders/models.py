@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
-from common.constants import OrderMode
+from common.constants import PAYMENT_METHOD_CHOICES, OrderMode
 
 ORDER_STATUS_CHOICES = [
     ("RECEIVED", "Received"),
@@ -84,6 +84,12 @@ class Order(models.Model):
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    currency = models.CharField(max_length=3, default="XOF")
+    payment_method_expected = models.CharField(
+        max_length=50,
+        choices=PAYMENT_METHOD_CHOICES,
+        blank=True,
+    )
     discount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

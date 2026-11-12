@@ -31,8 +31,13 @@ urlpatterns = [
         name="staff-list",
     ),
     path(
-        "staff/<uuid:pk>/",
+        "staff/<int:pk>/",
         StaffViewSet.as_view({"get": "retrieve", "patch": "partial_update"}),
         name="staff-detail",
+    ),
+    path(
+        "staff/<int:pk>/resend-invitation/",
+        StaffViewSet.as_view({"post": "resend_invitation"}),
+        name="staff-resend-invitation",
     ),
 ]

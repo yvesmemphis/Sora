@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from apps.audit import services as audit
 from apps.orders.models import Order
-from apps.orders.services import transition_order
+from apps.orders.services import transition_order, waiter_can_access_order
 from common.constants import MANAGERS, OrderStatus, Role
 from common.exceptions import DomainError
 
@@ -102,7 +102,7 @@ def register_payment(*, order, amount, payment_method, user, reference=None):
         raise DomainError(
             "payment_not_allowed", "Cette commande n'accepte plus de paiement.", 409
         )
-    if user.role == Role.WAITER and locked_order.created_by_id != user.pk:
+    if user.role == Role.WAITER and not waiter_can_access_order(locked_order, user):
         raise DomainError("permission_denied", "Commande non accessible.", 403)
 
     outstanding = locked_order.total - net_paid(locked_order)
@@ -116,6 +116,7 @@ def register_payment(*, order, amount, payment_method, user, reference=None):
     payment = Payment.objects.create(
         order=locked_order,
         amount=amount,
+        currency=locked_order.currency,
         status="CONFIRMED",
         payment_method=payment_method,
         reference=reference or None,

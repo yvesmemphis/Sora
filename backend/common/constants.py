@@ -12,6 +12,16 @@ ALL_ROLES = {Role.ADMIN, Role.MANAGER, Role.WAITER, Role.KITCHEN}
 MANAGERS = {Role.ADMIN, Role.MANAGER}
 FRONT_OF_HOUSE = {Role.ADMIN, Role.MANAGER, Role.WAITER}
 
+PAYMENT_METHOD_CHOICES = [
+    ("carte_bleue", "Carte"),
+    ("virement", "Virement"),
+    ("espece", "Espèces"),
+    ("card", "Card"),
+    ("cash", "Cash"),
+    ("bank_transfer", "Bank transfer"),
+    ("other", "Other"),
+]
+
 
 class OrderStatus(models.TextChoices):
     RECEIVED = "RECEIVED"

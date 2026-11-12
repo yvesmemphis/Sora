@@ -26,12 +26,38 @@ class PaymentSerializer(serializers.ModelSerializer):
 class PaymentSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
-        fields = ["id", "order", "status", "payment_method", "created_at"]
+        fields = [
+            "id",
+            "order",
+            "status",
+            "payment_method",
+            "currency",
+            "created_at",
+        ]
         read_only_fields = fields
+
+
+class PaymentDailyQuerySerializer(serializers.Serializer):
+    date = serializers.DateField()
+
+
+class PaymentDailyTotalSerializer(serializers.Serializer):
+    payment_method = serializers.CharField()
+    currency = serializers.CharField(max_length=3)
+    gross_collected = serializers.DecimalField(max_digits=14, decimal_places=2)
+    refunded = serializers.DecimalField(max_digits=14, decimal_places=2)
+    net_collected = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class PaymentDailyReportSerializer(serializers.Serializer):
+    date = serializers.DateField()
+    payments = PaymentSerializer(many=True)
+    totals = PaymentDailyTotalSerializer(many=True)
 
 
 class RefundSerializer(serializers.ModelSerializer):
     payment_order_id = serializers.CharField(source="payment.order_id", read_only=True)
+    currency = serializers.CharField(source="payment.currency", read_only=True)
 
     class Meta:
         model = Refund
@@ -39,6 +65,7 @@ class RefundSerializer(serializers.ModelSerializer):
             "id",
             "payment",
             "payment_order_id",
+            "currency",
             "amount",
             "reason",
             "status",
@@ -53,7 +80,7 @@ class PaymentCreateSerializer(serializers.Serializer):
         max_digits=12, decimal_places=2, min_value=Decimal("0.01")
     )
     payment_method = serializers.ChoiceField(
-        choices=[choice[0] for choice in Payment.METHOD_CHOICES]
+        choices=Payment.METHOD_CHOICES
     )
     reference = serializers.CharField(max_length=64, required=False, allow_blank=True)
 

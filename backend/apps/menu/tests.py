@@ -40,16 +40,17 @@ def test_deleting_a_dish_only_unpublishes_it(as_role):
     assert not dish.is_available
 
 
-def test_public_menu_exposes_only_available_published_dishes():
+def test_public_menu_exposes_published_dishes_and_availability_state():
     CategoryFactory()
-    visible = DishFactory(name="Visible")
+    visible = DishFactory(name="Visible", preparation_time=15)
     DishFactory(name="Masqué", is_published=False)
     DishFactory(name="Indisponible", is_available=False)
 
     response = APIClient().get(reverse("menu:public-menu"))
 
     assert response.status_code == 200
-    assert [dish["name"] for dish in response.data["dishes"]] == [visible.name]
+    dishes = response.data["dishes"]
+    assert [dish["name"] for dish in dishes] == ["Indisponible", visible.name]
     assert set(response.data["dishes"][0]) == {
         "id",
         "name",
@@ -58,4 +59,9 @@ def test_public_menu_exposes_only_available_published_dishes():
         "allergens",
         "image",
         "category",
+        "is_available",
+        "preparation_time",
     }
+    assert dishes[0]["is_available"] is False
+    assert dishes[1]["is_available"] is True
+    assert dishes[1]["preparation_time"] == 15

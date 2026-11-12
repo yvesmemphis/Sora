@@ -192,6 +192,7 @@ SIMPLE_JWT = {
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
     "SIGNING_KEY": env("JWT_SIGNING_KEY"),
 }
 TRACKING_TOKEN_KEY = env("TRACKING_TOKEN_KEY")
@@ -201,6 +202,9 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
+    "ENUM_NAME_OVERRIDES": {
+        "PaymentMethodEnum": "common.constants.PAYMENT_METHOD_CHOICES",
+    },
 }
 
 CACHES = {

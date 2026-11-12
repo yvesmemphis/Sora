@@ -35,8 +35,9 @@ class KitchenQueueViewSet(viewsets.ViewSet):
         responses=KitchenQueueItemSerializer(many=True),
     )
     def list(self, request):
-        queryset = KitchenQueueItem.objects.select_related("order").prefetch_related(
-            "order__items"
+        queryset = (
+            KitchenQueueItem.objects.select_related("order", "order__location")
+            .prefetch_related("order__items")
         )
         updated_after = request.query_params.get("updated_after")
         if updated_after:
