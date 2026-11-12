@@ -5,12 +5,19 @@ import { use, useEffect, useState } from "react";
 import { Icon, type NomIcone } from "@/components/ui/icon";
 import { Badge, Encadre, Historique, cx } from "@/components/ui/primitives";
 import { ApiError, messageErreur } from "@/lib/api/client";
-import { heureDe, statutFront } from "@/lib/api/conversions";
-import { suivreCommande, type SuiviApi } from "@/lib/api/commandes";
+import { heureDe, montant, statutFront } from "@/lib/api/conversions";
+import { annulerCommandePublique, modePaiementDe, suivreCommande, type SuiviApi } from "@/lib/api/commandes";
 import { lireCommandeLocale, type CommandeLocale } from "@/lib/client/panier";
-import { formatFCFA } from "@/lib/format";
+import { formatFCFA, formatMinuteur } from "@/lib/format";
+import { useMaintenant } from "@/lib/hooks";
 import { ACTUALISATION_MS, COULEUR_HISTORIQUE, MODES_PAIEMENT, MODES_SERVICE, STATUTS_COMMANDE } from "@/lib/statuts";
 import type { EvenementCommande, StatutCommande } from "@/lib/types";
+
+/**
+ * Délai de désistement : réglage `withdrawal_delay_minutes` du backend (5 min par défaut).
+ * Il n'est pas encore exposé publiquement ; le serveur reste juge (erreur 409 au-delà).
+ */
+const DELAI_DESISTEMENT_SEC = 5 * 60;
 
 const TERMINAUX: StatutCommande[] = ["servie", "cloturee", "annulee", "refusee"];
 
@@ -80,6 +87,9 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
   const [historique, setHistorique] = useState<EvenementCommande[]>([]);
   const [erreur, setErreur] = useState<string | null>(null);
   const [introuvable, setIntrouvable] = useState(false);
+  const [annulation, setAnnulation] = useState<{ envoi: boolean; erreur: string | null }>({ envoi: false, erreur: null });
+  const [version, setVersion] = useState(0);
+  const maintenant = useMaintenant();
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- lecture du stockage du navigateur
@@ -118,7 +128,18 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
       ctrl.abort();
       clearInterval(iv);
     };
-  }, [jeton]);
+  }, [jeton, version]);
+
+  async function annuler() {
+    setAnnulation({ envoi: true, erreur: null });
+    try {
+      await annulerCommandePublique(jeton);
+      setAnnulation({ envoi: false, erreur: null });
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setAnnulation({ envoi: false, erreur: messageErreur(e) });
+    }
+  }
 
   if (introuvable) {
     return (
@@ -139,6 +160,9 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
   const numero = suivi.number;
   const mode = locale ? MODES_SERVICE[locale.mode] : null;
   const lieu = !locale || !mode ? "" : locale.mode === "emporter" ? "à emporter" : mode.court(locale.emplacement).toLowerCase();
+  const paiement = modePaiementDe(suivi.payment_method_expected) ?? locale?.paiement;
+  const total = suivi.total !== undefined ? montant(suivi.total) : locale?.total;
+  const restant = maintenant ? DELAI_DESISTEMENT_SEC - (maintenant - new Date(suivi.created_at).getTime()) / 1000 : DELAI_DESISTEMENT_SEC;
 
   const recap = (
     <div className="tabular flex flex-col gap-2.5 rounded-2xl border border-ligne bg-papier p-3.5 text-[15px]">
@@ -158,18 +182,20 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
               </span>
             </div>
           ))}
-      {locale ? (
+      {total !== undefined ? (
         <>
           <div className="h-px bg-ligne" />
           <div className="flex justify-between font-bold">
             <span>Total</span>
-            <span>{formatFCFA(locale.total)}</span>
-          </div>
-          <div className="flex items-center gap-2 text-[13px] text-texte-3">
-            <Icon name={MODES_PAIEMENT[locale.paiement].icone} className="size-4" />
-            Paiement au service : {MODES_PAIEMENT[locale.paiement].libelle.toLowerCase()}
+            <span>{formatFCFA(total)}</span>
           </div>
         </>
+      ) : null}
+      {paiement ? (
+        <div className="flex items-center gap-2 text-[13px] text-texte-3">
+          <Icon name={MODES_PAIEMENT[paiement].icone} className="size-4" />
+          Paiement au service : {MODES_PAIEMENT[paiement].libelle.toLowerCase()}
+        </div>
       ) : null}
     </div>
   );
@@ -217,16 +243,48 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
         </div>
         <Etapes statut="recue" />
         {bandeauErreur}
-        <div className="flex flex-col gap-3 rounded-[20px] bg-vert p-5 text-creme">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold tracking-[.14em] text-or">EN ATTENTE</span>
-            <Badge apparence={STATUTS_COMMANDE.recue} />
+        {restant > 0 ? (
+          <div className="relative flex flex-col gap-3 overflow-hidden rounded-[20px] bg-vert p-5 text-creme">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold tracking-[.14em] text-or">DÉSISTEMENT POSSIBLE</span>
+              <Badge apparence={STATUTS_COMMANDE.recue} />
+            </div>
+            <div className="flex items-baseline gap-2.5" role="timer" aria-live="off">
+              <span className="tabular text-[56px] leading-none font-bold tracking-[-.01em]">{formatMinuteur(restant)}</span>
+              <span className="text-sm opacity-85">restantes</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-[3px] bg-creme/20">
+              <div
+                className="h-1.5 rounded-[3px] bg-or transition-[width] duration-1000 ease-linear"
+                style={{ width: `${(restant / DELAI_DESISTEMENT_SEC) * 100}%` }}
+              />
+            </div>
+            <p className="m-0 text-sm leading-5 text-[#E4E9E5]">
+              Vous pouvez encore annuler. Ensuite, la commande sera confirmée par le personnel et transmise à la cuisine.
+            </p>
+            <button
+              type="button"
+              onClick={annuler}
+              disabled={annulation.envoi}
+              className="flex h-12 cursor-pointer items-center justify-center gap-2 rounded-xl bg-creme text-base font-bold text-danger disabled:opacity-60"
+            >
+              <Icon name="x" className="size-[18px]" />
+              {annulation.envoi ? "Annulation…" : "Annuler ma commande"}
+            </button>
+            {annulation.erreur ? <span className="text-sm font-bold text-[#F2C4AE]">{annulation.erreur}</span> : null}
           </div>
-          <p className="m-0 text-lg leading-6 font-bold">Un membre du personnel va confirmer votre commande.</p>
-          <p className="m-0 text-sm leading-5 text-[#E4E9E5]">
-            Elle sera ensuite transmise à la cuisine. Cette page se met à jour toute seule. Pour annuler, adressez-vous au personnel.
-          </p>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-3 rounded-[20px] bg-vert p-5 text-creme">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold tracking-[.14em] text-or">EN ATTENTE</span>
+              <Badge apparence={STATUTS_COMMANDE.recue} />
+            </div>
+            <p className="m-0 text-lg leading-6 font-bold">Un membre du personnel va confirmer votre commande.</p>
+            <p className="m-0 text-sm leading-5 text-[#E4E9E5]">
+              Elle sera ensuite transmise à la cuisine. Cette page se met à jour toute seule. Pour toute modification, adressez-vous au personnel.
+            </p>
+          </div>
+        )}
         {recap}
       </div>
     );
@@ -265,7 +323,7 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
               </div>
               <div className="flex flex-col gap-[3px]">
                 <span className="font-bold text-or">PAIEMENT</span>
-                <span className="text-sm font-bold">{MODES_PAIEMENT[locale.paiement].libelle}</span>
+                <span className="text-sm font-bold">{MODES_PAIEMENT[paiement ?? locale.paiement].libelle}</span>
               </div>
             </div>
           ) : null}

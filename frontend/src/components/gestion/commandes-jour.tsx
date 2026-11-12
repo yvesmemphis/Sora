@@ -6,18 +6,12 @@ import { Icon } from "@/components/ui/icon";
 import { Badge, Bouton, Puce } from "@/components/ui/primitives";
 import { messageErreur } from "@/lib/api/client";
 import { commandeDepuisApi, listerCommandes } from "@/lib/api/commandes";
-import { listerEmplacements } from "@/lib/api/emplacements";
+import { dateIso } from "@/lib/api/gestion";
 import { formatFCFA } from "@/lib/format";
-import { ACTUALISATION_MS, MODES_SERVICE, STATUTS_COMMANDE } from "@/lib/statuts";
+import { ACTUALISATION_MS, MODES_PAIEMENT, MODES_SERVICE, STATUTS_COMMANDE } from "@/lib/statuts";
 import type { Commande, StatutCommande } from "@/lib/types";
 
-const COLONNES = "130px 1.3fr 1.6fr 1fr .9fr 1fr 80px";
-
-function estDuJour(iso?: string): boolean {
-  if (!iso) return false;
-  const d = new Date(iso);
-  return d.toDateString() === new Date().toDateString();
-}
+const COLONNES = "130px 1.3fr 1.6fr 1fr .9fr .9fr 1fr 80px";
 
 /** Commandes du jour, vue gestionnaire (`GET /orders/`, actualisée toutes les 5 s). */
 export function CommandesJour() {
@@ -29,8 +23,8 @@ export function CommandesJour() {
 
   const charger = useCallback(async () => {
     try {
-      const [liste, emplacements] = await Promise.all([listerCommandes(), listerEmplacements()]);
-      setCommandes(liste.map((c) => commandeDepuisApi(c, { emplacements })).filter((c) => estDuJour(c.creeeLe)));
+      const liste = await listerCommandes({ date: dateIso(new Date()) });
+      setCommandes(liste.map((c) => commandeDepuisApi(c)));
       setErreur(null);
     } catch (e) {
       setErreur(messageErreur(e));
@@ -104,7 +98,7 @@ export function CommandesJour() {
           </Puce>
         ))}
       </div>
-      <Tableau colonnes={COLONNES} entetes={["N°", "EMPLACEMENT", "ARTICLES", "STATUT", "ORIGINE", "TOTAL", "HEURE"]} largeurMin={860}>
+      <Tableau colonnes={COLONNES} entetes={["N°", "EMPLACEMENT", "ARTICLES", "STATUT", "ORIGINE", "PAIEMENT", "TOTAL", "HEURE"]} largeurMin={860}>
         {visibles.map((c) => (
           <LigneTableau key={c.numero} colonnes={COLONNES} className="tabular">
             <span className="font-bold text-vert">{c.numero}</span>
@@ -117,6 +111,9 @@ export function CommandesJour() {
               <Badge apparence={STATUTS_COMMANDE[c.statut]} />
             </span>
             <span className="text-[13px]">{c.source === "PUBLIC" ? "Client (QR)" : "Personnel"}</span>
+            <span className={c.payee ? "text-[13px] font-bold text-ok" : "text-[13px] text-texte-3"}>
+              {c.payee ? "Payée" : "À encaisser"} · {MODES_PAIEMENT[c.paiement].libelle.toLowerCase()}
+            </span>
             <span className="font-bold">{formatFCFA(c.total ?? 0)}</span>
             <span className="text-texte-3">{c.passeeA}</span>
           </LigneTableau>

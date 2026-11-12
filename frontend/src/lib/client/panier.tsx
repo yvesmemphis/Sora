@@ -11,7 +11,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { cleIdempotence } from "../api/client";
 import { passerCommandePublique } from "../api/commandes";
 import { montant, referenceSaisie, TYPE_EMPLACEMENT } from "../api/conversions";
-import { MODES_PAIEMENT } from "../statuts";
 import type { LigneCommande, ModePaiement, ModeService, Plat } from "../types";
 import { useMenu } from "./menu";
 
@@ -102,7 +101,7 @@ export function PanierProvider({ children }: { children: ReactNode }) {
   const lignes = useMemo<LignePanierDetaillee[]>(
     () =>
       brut.flatMap((l) => {
-        const plat = menu?.plats.find((p) => p.id === l.platId);
+        const plat = menu?.plats.find((p) => p.id === l.platId && p.disponibilite === "disponible");
         return plat ? [{ ...l, plat, sousTotal: plat.prix * l.quantite }] : [];
       }),
     [brut, menu],
@@ -139,8 +138,7 @@ export function PanierProvider({ children }: { children: ReactNode }) {
         {
           mode,
           emplacement: mode === "emporter" ? undefined : { type, reference },
-          // Le backend ne stocke pas le mode de paiement : il est annoncé dans la note.
-          note: `Paiement prévu : ${MODES_PAIEMENT[paiement].libelle.toLowerCase()}`,
+          paiement,
           lignes: lignes.map((l) => ({ platId: l.platId, quantite: l.quantite, note: l.note })),
         },
         cle.current,

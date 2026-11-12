@@ -6,6 +6,8 @@ export interface ReglagesApi {
   auto_confirm_orders: boolean;
   public_ordering_enabled: boolean;
   expiry_alert_days: number;
+  /** Délai pendant lequel le client peut annuler une commande QR « reçue ». */
+  withdrawal_delay_minutes: number;
 }
 
 export function lireReglages(): Promise<ReglagesApi> {
@@ -27,8 +29,15 @@ export interface EvenementAuditApi {
   metadata: Record<string, unknown>;
 }
 
-export function listerJournal(page = 1): Promise<Page<EvenementAuditApi>> {
-  return api<Page<EvenementAuditApi>>(`/audit/?page=${page}&page_size=100`);
+export function listerJournal(
+  filtres: { page?: number; date_from?: string; date_to?: string; action?: string } = {},
+): Promise<Page<EvenementAuditApi>> {
+  const q = new URLSearchParams({ page: String(filtres.page ?? 1), page_size: "100" });
+  for (const cle of ["date_from", "date_to", "action"] as const) {
+    const v = filtres[cle];
+    if (v) q.set(cle, v);
+  }
+  return api<Page<EvenementAuditApi>>(`/audit/?${q.toString()}`);
 }
 
 /** Libellés lisibles des actions d'audit connues du backend. */
@@ -43,6 +52,8 @@ export const LIBELLES_ACTION: Record<string, string> = {
   "settings.change": "Paramètres modifiés",
   "staff.invite": "Utilisateur invité",
   "staff.change": "Compte modifié",
+  "staff.invitation_resent": "Invitation renvoyée",
+  "order.location_changed": "Emplacement modifié",
   "stock.receive": "Réception de lot",
   "stock.adjust": "Ajustement d'inventaire",
   "stock.consume": "Consommation de stock",

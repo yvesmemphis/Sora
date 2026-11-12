@@ -6,7 +6,7 @@ import { Icon } from "@/components/ui/icon";
 import { Modale } from "@/components/ui/modale";
 import { Avatar, Bouton, classeChamp, cx } from "@/components/ui/primitives";
 import { messageErreur, toutesLesPages } from "@/lib/api/client";
-import { inviterEmploye, modifierEmploye, type Employe } from "@/lib/api/personnel";
+import { inviterEmploye, modifierEmploye, renvoyerInvitation, type Employe } from "@/lib/api/personnel";
 import { ROLE_BACKEND, ROLES, type Role } from "@/lib/demo/admin";
 import { initiales } from "@/lib/format";
 import { LIBELLE_ROLE } from "@/lib/staff/session";
@@ -17,11 +17,11 @@ const COLONNES = "2fr 1.1fr .9fr 36px";
 
 function versUtilisateur(e: Employe): Utilisateur {
   return {
-    id: e.id,
+    id: String(e.id),
     nom: `${e.first_name} ${e.last_name}`.trim() || e.email,
     email: e.email,
     role: LIBELLE_ROLE[e.role] as Role,
-    statut: e.is_active ? "Actif" : "Suspendu",
+    statut: !e.is_active ? "Suspendu" : e.is_invited ? "Invité" : "Actif",
     derniereConnexion: "",
   };
 }
@@ -95,6 +95,19 @@ export function Utilisateurs() {
     }
   }
 
+  const [info, setInfo] = useState<string | null>(null);
+
+  async function renvoyer(id: string) {
+    setMenu(null);
+    try {
+      await renvoyerInvitation(id);
+      setInfo("Invitation renvoyée.");
+      setErreur(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    }
+  }
+
   async function modifier(id: string, donnees: { role?: Role; actif?: boolean }) {
     setMenu(null);
     try {
@@ -123,6 +136,10 @@ export function Utilisateurs() {
       {erreur ? (
         <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
           {erreur}
+        </div>
+      ) : info ? (
+        <div role="status" className="rounded-xl bg-ok-fond px-4 py-3 text-sm font-bold text-ok">
+          {info}
         </div>
       ) : null}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -195,6 +212,11 @@ export function Utilisateurs() {
                       style={position}
                       className="fixed z-30 flex w-52 flex-col overflow-hidden rounded-xl border border-ligne bg-papier text-sm shadow-[0_12px_30px_-12px_rgba(0,0,0,.3)]"
                     >
+                      {u.statut === "Invité" ? (
+                        <button type="button" onClick={() => void renvoyer(u.id)} className="cursor-pointer border-b border-ligne-3 px-4 py-2.5 text-left font-bold text-vert hover:bg-sable">
+                          Renvoyer l&apos;invitation
+                        </button>
+                      ) : null}
                       <span className="px-4 pt-2.5 pb-1 text-xs font-bold text-texte-3">Changer le rôle</span>
                       {ROLES.filter((r) => r !== u.role).map((r) => (
                         <button

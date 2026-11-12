@@ -6,8 +6,10 @@ import { Badge, Bouton, Historique, Puce, cx } from "@/components/ui/primitives"
 import { formatFCFA } from "@/lib/format";
 import { MODES_PAIEMENT, MODES_SERVICE, STATUTS_COMMANDE } from "@/lib/statuts";
 import { useService } from "@/lib/staff/service";
+import { useSession } from "@/lib/staff/session";
 import type { Commande, ModePaiement, StatutCommande } from "@/lib/types";
 import { ModaleAnnulation } from "./modale-annulation";
+import { ModaleEmplacement } from "./modale-emplacement";
 
 /** Total serveur si connu, sinon somme des lignes. */
 export function totalCommande(c: Pick<Commande, "lignes" | "total">): number {
@@ -53,7 +55,11 @@ function actionSuivante(c: Commande): { libelle: string; cible: StatutCommande |
 export function CommandesService() {
   const { commandes, chargement, selection, selectionner, changerStatut, marquerPayee } = useService();
   const [filtre, setFiltre] = useState<Filtre>("toutes");
+  const { utilisateur } = useSession();
+  // Le serveur annule avant la préparation ; le gestionnaire à tout moment avant clôture.
+  const peutAnnuler = (s: StatutCommande) => utilisateur.role !== "WAITER" || s === "recue" || s === "confirmee";
   const [annulation, setAnnulation] = useState(false);
+  const [emplacement, setEmplacement] = useState(false);
   const [modeChoisi, setModeChoisi] = useState<{ numero: string; mode: ModePaiement } | null>(null);
   const [envoi, setEnvoi] = useState(false);
 
@@ -150,6 +156,11 @@ export function CommandesService() {
                 {MODES_SERVICE[sel.mode].long(sel.emplacement)} · passée à {sel.passeeA}
               </span>
             </div>
+            {sel.mode !== "emporter" && (sel.statut === "recue" || sel.statut === "confirmee") ? (
+              <Bouton variante="fantome" hauteur="lg" icone="edit" onClick={() => setEmplacement(true)}>
+                Modifier l&apos;emplacement
+              </Bouton>
+            ) : null}
           </div>
 
           <div className="grid gap-[18px] xl:grid-cols-[1.25fr_1fr]">
@@ -234,7 +245,7 @@ export function CommandesService() {
                       </Bouton>
                     );
                   })()}
-                  {sel.statut !== "servie" ? (
+                  {sel.statut !== "servie" && peutAnnuler(sel.statut) ? (
                     <Bouton variante="danger-texte" hauteur="lg" icone="x" onClick={() => setAnnulation(true)}>
                       Annuler la commande
                     </Bouton>
@@ -251,6 +262,7 @@ export function CommandesService() {
       {sel ? (
         <>
           <ModaleAnnulation key={`a-${sel.numero}`} commande={sel} ouverte={annulation} onFermer={() => setAnnulation(false)} />
+          <ModaleEmplacement key={`e-${sel.numero}-${emplacement}`} commande={sel} ouverte={emplacement} onFermer={() => setEmplacement(false)} />
         </>
       ) : null}
     </div>

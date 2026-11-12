@@ -15,6 +15,8 @@ interface PlatPublicApi {
   allergens: string[];
   image: string | null;
   category: string;
+  is_available: boolean;
+  preparation_time: number | null;
 }
 
 interface MenuPublicApi {
@@ -39,9 +41,9 @@ export async function chargerMenuPublic(signal?: AbortSignal): Promise<MenuPubli
     description: d.description,
     categorie: d.category,
     prix: montant(d.price),
-    preparationMin: null,
-    // Le menu public ne renvoie que les plats disponibles.
-    disponibilite: "disponible",
+    preparationMin: d.preparation_time,
+    // L'API ne distingue pas encore « temporairement » et « épuisé ».
+    disponibilite: d.is_available ? "disponible" : "temporaire",
     allergenes: d.allergens ?? [],
     image: d.image,
   }));

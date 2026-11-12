@@ -9,12 +9,11 @@ import {
   commandeDepuisApi,
   enregistrerPaiement,
   listerCommandes,
-  listerPaiements,
   modePaiementDe,
-  type CommandeApi,
+  rapportPaiements,
 } from "@/lib/api/commandes";
 import { montant } from "@/lib/api/conversions";
-import { listerEmplacements, type EmplacementApi } from "@/lib/api/emplacements";
+import { dateIso } from "@/lib/api/gestion";
 import { formatEcart, formatFCFA, formatNombre, lireMontant } from "@/lib/format";
 import { MODES_SERVICE } from "@/lib/statuts";
 
@@ -24,7 +23,6 @@ interface Totaux {
   commandesPayees: number;
 }
 
-const estDuJour = (iso: string) => new Date(iso).toDateString() === new Date().toDateString();
 
 function BlocCaisse({
   libelle,
@@ -99,38 +97,33 @@ export function ClotureCaisse() {
   const [etat, setEtat] = useState<string | null>("Chargement…");
 
   /**
-   * Le backend n'expose pas encore de liste des paiements par date :
-   * on lit les paiements de chaque commande du jour.
+   * Totaux par mode : `GET /payments/?date=` ; commandes servies non soldées : `GET /orders/?date=`.
    */
   const charger = useCallback(async () => {
     try {
-      const [liste, emplacements] = await Promise.all([listerCommandes(), listerEmplacements()]);
-      const duJour = liste.filter((c) => estDuJour(c.created_at) && !["CANCELLED", "REJECTED"].includes(c.status));
-      const paiements = await Promise.all(duJour.map((c) => listerPaiements(c.id).then((ps) => ({ c, ps }))));
+      const jour = dateIso(new Date());
+      const [rapport, liste] = await Promise.all([rapportPaiements(jour), listerCommandes({ date: jour })]);
       const t: Totaux = { especes: { total: 0, commandes: 0 }, carte: { total: 0, commandes: 0 }, commandesPayees: 0 };
-      const impayees: { c: CommandeApi; e: EmplacementApi[] }[] = [];
-      for (const { c, ps } of paiements) {
-        const ok = ps.filter((x) => x.status === "CONFIRMED");
-        if (ok.length) t.commandesPayees += 1;
-        for (const x of ok) {
-          const bloc = modePaiementDe(x.payment_method) === "carte" ? t.carte : t.especes;
-          bloc.total += montant(x.amount);
-          bloc.commandes += 1;
-        }
-        const paye = ok.reduce((s, x) => s + montant(x.amount), 0);
-        if (c.status === "SERVED" && paye < montant(c.total)) impayees.push({ c, e: emplacements });
+      for (const ligne of rapport.totals) {
+        const bloc = modePaiementDe(ligne.payment_method) === "carte" ? t.carte : t.especes;
+        bloc.total += montant(ligne.net_collected);
       }
+      const confirmes = rapport.payments.filter((x) => x.status === "CONFIRMED" || x.status === "REFUNDED");
+      for (const x of confirmes) (modePaiementDe(x.payment_method) === "carte" ? t.carte : t.especes).commandes += 1;
+      t.commandesPayees = new Set(confirmes.map((x) => x.order)).size;
       setCaisse(t);
       setNonPayees(
-        impayees.map(({ c, e }) => {
-          const cmd = commandeDepuisApi(c, { emplacements: e });
-          return {
-            id: c.id,
-            numero: cmd.numero,
-            detail: `${MODES_SERVICE[cmd.mode].court(cmd.emplacement)} · passée ${cmd.passeeA}`,
-            total: cmd.total ?? 0,
-          };
-        }),
+        liste
+          .filter((c) => c.status === "SERVED" && !c.is_paid)
+          .map((c) => {
+            const cmd = commandeDepuisApi(c);
+            return {
+              id: c.id,
+              numero: cmd.numero,
+              detail: `${MODES_SERVICE[cmd.mode].court(cmd.emplacement)} · passée ${cmd.passeeA}`,
+              total: Math.max(0, (cmd.total ?? 0) - montant(c.amount_paid)),
+            };
+          }),
       );
       setEtat(null);
     } catch (e) {

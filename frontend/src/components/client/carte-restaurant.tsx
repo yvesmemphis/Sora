@@ -21,7 +21,7 @@ export function CarteRestaurant() {
   const categorie = choix && CATEGORIES.includes(choix) ? choix : (CATEGORIES.find((c) => c === "Plats") ?? CATEGORIES[0] ?? "");
   const [recherche, setRecherche] = useState("");
   // Plat mis en avant : le premier de la catégorie « Plats », s'il existe.
-  const platDuJour = PLATS.find((p) => p.categorie === "Plats");
+  const platDuJour = PLATS.find((p) => p.categorie === "Plats" && p.disponibilite === "disponible");
 
   // QR code de table ou de chambre : `/menu?table=T6`.
   useEffect(() => memoriserEmplacementQr(new URLSearchParams(window.location.search)), []);
@@ -118,6 +118,7 @@ export function CarteRestaurant() {
               </Link>
               <span className="text-[13px] opacity-85">
                 {formatFCFA(platDuJour.prix)}
+                {platDuJour.preparationMin ? ` · prêt en ${platDuJour.preparationMin} min` : ""}
               </span>
               <button
                 type="button"

@@ -7,17 +7,15 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  changerEmplacementCommande,
   changerStatutCommande,
   commandeDepuisApi,
   creerCommande,
   enregistrerPaiement,
-  listerCommandes,
-  listerPaiements,
   trouverEmplacement,
   type CommandeApi,
 } from "../api/commandes";
 import { api, API_URL, messageErreur } from "../api/client";
-import { montant } from "../api/conversions";
 import { listerEmplacements, type EmplacementApi } from "../api/emplacements";
 import { changerDisponibilite, chargerCartePersonnel } from "../api/menu";
 import { ACTUALISATION_MS } from "../statuts";
@@ -40,6 +38,8 @@ interface ServiceContexte {
   changerStatut: (numero: string, statut: StatutCommande, note?: string) => Promise<boolean>;
   marquerPayee: (numero: string, mode: ModePaiement) => Promise<boolean>;
   annuler: (numero: string, motif: string, commentaire: string) => Promise<boolean>;
+  /** Corrige la table ou la chambre (avant le début de la préparation). */
+  changerEmplacement: (numero: string, saisie: string) => Promise<boolean>;
   creer: (c: {
     mode: ModeService;
     emplacement: string;
@@ -55,27 +55,6 @@ interface ServiceContexte {
 
 const Ctx = createContext<ServiceContexte | null>(null);
 
-const CLE_PAIEMENTS = "sora.modes-paiement";
-
-/** Le backend ne stocke pas le mode de paiement annoncé : on le garde sur l'appareil. */
-function lireModes(): Record<string, ModePaiement> {
-  try {
-    return JSON.parse(window.localStorage.getItem(CLE_PAIEMENTS) ?? "{}") as Record<string, ModePaiement>;
-  } catch {
-    return {};
-  }
-}
-
-function ecrireMode(id: number, mode: ModePaiement) {
-  try {
-    const modes = lireModes();
-    modes[id] = mode;
-    window.localStorage.setItem(CLE_PAIEMENTS, JSON.stringify(modes));
-  } catch {
-    /* stockage indisponible */
-  }
-}
-
 function estDuJour(iso: string): boolean {
   const d = new Date(iso);
   const n = new Date();
@@ -88,35 +67,20 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const [brutes, setBrutes] = useState<CommandeApi[]>([]);
   const [emplacements, setEmplacements] = useState<EmplacementApi[]>([]);
   const [carte, setCarte] = useState<{ categories: string[]; plats: Plat[] }>({ categories: [], plats: [] });
-  const [payees, setPayees] = useState<Record<number, boolean>>({});
-  const [modes, setModes] = useState<Record<string, ModePaiement>>({});
   const [selection, setSelection] = useState<string | null>(null);
   const [chargement, setChargement] = useState(true);
   const [actualiseLe, setActualiseLe] = useState(0);
   const [erreurReseau, setErreurReseau] = useState<string | null>(null);
   const [erreurAction, setErreurAction] = useState<string | null>(null);
   const enCours = useRef(false);
-  /**
-   * Le rôle cuisine ne reçoit pas `updated_at` : on retient l'heure à laquelle
-   * chaque changement de statut a été observé, pour les minuteurs.
-   */
-  const vus = useRef(new Map<number, { statut: string; depuis: string }>());
-  const [depuis, setDepuis] = useState<Record<number, string>>({});
 
   const actualiser = useCallback(async () => {
     if (enCours.current) return;
     enCours.current = true;
     try {
-      const liste = await listerCommandes();
-      const premierChargement = vus.current.size === 0;
-      const maintenant = new Date().toISOString();
-      for (const c of liste) {
-        const connu = vus.current.get(c.id);
-        if (!connu || connu.statut !== c.status) {
-          vus.current.set(c.id, { statut: c.status, depuis: c.updated_at ?? (premierChargement || !connu ? c.created_at : maintenant) });
-        }
-      }
-      setDepuis(Object.fromEntries([...vus.current].map(([id, v]) => [id, v.depuis])));
+      // Fenêtre glissante de 36 h : couvre un service qui passe minuit sans recharger tout l'historique.
+      const depuis = new Date(new Date().getTime() - 36 * 3_600_000).toISOString();
+      const liste = await api<CommandeApi[]>(`/orders/?created_after=${encodeURIComponent(depuis)}`);
       setBrutes(liste);
       setActualiseLe(Date.now());
       setErreurReseau(null);
@@ -136,8 +100,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
 
   // Actualisation périodique.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- lecture du stockage du navigateur
-    setModes(lireModes());
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement initial depuis l API
     void actualiser();
     void chargerReferentiels();
     const iv = setInterval(() => void actualiser(), ACTUALISATION_MS);
@@ -180,31 +143,13 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
   const commandes = useMemo(
     () =>
       brutes
-        .map((c) => ({
-          ...commandeDepuisApi(c, { emplacements, payee: payees[c.id], paiement: modes[c.id] }),
-          majLe: c.updated_at ?? depuis[c.id] ?? c.created_at,
-        }))
+        .map((c) => commandeDepuisApi(c, { emplacements }))
         .filter((c) => ACTIFS.includes(c.statut) || (c.creeeLe && estDuJour(c.creeeLe)))
         .sort((a, b) => (b.creeeLe ?? "").localeCompare(a.creeeLe ?? "")),
-    [brutes, emplacements, payees, modes, depuis],
+    [brutes, emplacements],
   );
 
   const parNumero = useCallback((numero: string) => commandes.find((c) => c.numero === numero), [commandes]);
-
-  // Paiements de la commande sélectionnée (salle et gestion uniquement).
-  const selId = selection ? parNumero(selection)?.id : undefined;
-  useEffect(() => {
-    if (!selId || role === "KITCHEN") return;
-    const total = montant(brutes.find((c) => c.id === selId)?.total);
-    listerPaiements(selId)
-      .then((ps) => {
-        const confirmes = ps.filter((p) => p.status === "CONFIRMED" || p.status === "REFUNDED");
-        // Le serveur ne voit pas les montants : un paiement confirmé vaut paiement en totalité.
-        const paye = confirmes.some((p) => p.amount === undefined) || confirmes.reduce((s, p) => s + montant(p.amount), 0) >= total;
-        setPayees((prev) => ({ ...prev, [selId]: paye }));
-      })
-      .catch(() => undefined);
-  }, [selId, role, brutes]);
 
   const executer = useCallback(
     async <T,>(action: () => Promise<T>): Promise<T | null> => {
@@ -237,13 +182,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
       if (!c?.id || c.total === undefined) return false;
       const id = c.id;
       const total = c.total;
-      const ok = (await executer(() => enregistrerPaiement(id, total, mode))) !== null;
-      if (ok) {
-        setPayees((prev) => ({ ...prev, [id]: true }));
-        ecrireMode(id, mode);
-        setModes((prev) => ({ ...prev, [id]: mode }));
-      }
-      return ok;
+      return (await executer(() => enregistrerPaiement(id, total, mode))) !== null;
     },
     [parNumero, executer],
   );
@@ -253,6 +192,21 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
     [changerStatut],
   );
 
+  const changerEmplacement = useCallback<ServiceContexte["changerEmplacement"]>(
+    async (numero, saisie) => {
+      const c = parNumero(numero);
+      if (!c?.id) return false;
+      const loc = trouverEmplacement(c.mode, saisie, emplacements);
+      if (!loc) {
+        setErreurAction(`${c.mode === "table" ? "Table" : "Chambre"} « ${saisie} » inconnue ou inactive.`);
+        return false;
+      }
+      const id = c.id;
+      return (await executer(() => changerEmplacementCommande(id, loc.id))) !== null;
+    },
+    [parNumero, emplacements, executer],
+  );
+
   const creer = useCallback<ServiceContexte["creer"]>(
     async ({ mode, emplacement, paiement, lignes, note }) => {
       const loc = trouverEmplacement(mode, emplacement, emplacements);
@@ -260,12 +214,10 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
         setErreurAction(`${mode === "table" ? "Table" : "Chambre"} « ${emplacement} » inconnue ou inactive.`);
         return null;
       }
-      const cree = await executer(() => creerCommande({ mode, location: loc?.id ?? null, notes: note, lignes }));
+      const cree = await executer(() => creerCommande({ mode, location: loc?.id ?? null, paiement, notes: note, lignes }));
       if (!cree) return null;
-      ecrireMode(cree.id, paiement);
-      setModes((prev) => ({ ...prev, [cree.id]: paiement }));
       setBrutes((prev) => [cree, ...prev.filter((c) => c.id !== cree.id)]);
-      const commande = commandeDepuisApi(cree, { emplacements, paiement });
+      const commande = commandeDepuisApi(cree, { emplacements });
       setSelection(commande.numero);
       return commande;
     },
@@ -297,13 +249,14 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
       changerStatut,
       marquerPayee,
       annuler,
+      changerEmplacement,
       creer,
       carte,
       emplacements,
       signalerIndisponibilite,
       actualiser,
     }),
-    [commandes, chargement, actualiseLe, erreurReseau, selection, changerStatut, marquerPayee, annuler, creer, carte, emplacements, signalerIndisponibilite, actualiser],
+    [commandes, chargement, actualiseLe, erreurReseau, selection, changerStatut, marquerPayee, annuler, changerEmplacement, creer, carte, emplacements, signalerIndisponibilite, actualiser],
   );
 
   return (

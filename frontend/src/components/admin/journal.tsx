@@ -7,6 +7,7 @@ import { Avatar, Bouton, Puce, cx } from "@/components/ui/primitives";
 import { LIBELLES_ACTION, listerJournal } from "@/lib/api/admin";
 import { messageErreur } from "@/lib/api/client";
 import { heureDe } from "@/lib/api/conversions";
+import { dateIso } from "@/lib/api/gestion";
 import { type ModuleJournal } from "@/lib/demo/admin";
 import { initiales } from "@/lib/format";
 
@@ -54,12 +55,16 @@ export function Journal() {
   const [recherche, setRecherche] = useState("");
   const [lignes, setLignes] = useState<LigneJournal[]>([]);
   const [etat, setEtat] = useState<string | null>("Chargement…");
+  const [periode, setPeriode] = useState<1 | 7 | 30>(1);
+  const [page, setPage] = useState(1);
+  const [suite, setSuite] = useState(false);
 
   useEffect(() => {
-    listerJournal()
-      .then((page) => {
-        setLignes(
-          page.results.map((e) => ({
+    const debut = new Date(new Date().getTime() - (periode - 1) * 86_400_000);
+    listerJournal({ page, date_from: dateIso(debut), date_to: dateIso(new Date()) })
+      .then((rep) => {
+        setSuite(!!rep.next);
+        const nouvelles = rep.results.map((e) => ({
             id: e.id,
             date: new Date(e.created_at).toLocaleDateString("fr-FR"),
             heure: heureDe(e.created_at),
@@ -67,12 +72,12 @@ export function Journal() {
             module: moduleDe(e.action),
             action: `${LIBELLES_ACTION[e.action] ?? e.action}${detail(e.metadata ?? {})}${e.result !== "SUCCESS" ? ` · ${e.result}` : ""}`,
             objet: e.resource_id ? `${e.resource_type} ${e.resource_id.slice(0, 8)}` : e.resource_type,
-          })),
-        );
+          }));
+        setLignes((prev) => (page === 1 ? nouvelles : [...prev, ...nouvelles]));
         setEtat(null);
       })
       .catch((e: unknown) => setEtat(messageErreur(e)));
-  }, []);
+  }, [periode, page]);
 
   const visibles = useMemo(() => {
     const q = recherche.trim().toLowerCase();
@@ -125,10 +130,23 @@ export function Journal() {
             {f}
           </Puce>
         ))}
-        <span className="flex h-10 items-center gap-2 rounded-[10px] border border-bordure bg-papier px-3.5 text-[13px] font-medium lg:ml-auto">
+        <label className="flex h-10 items-center gap-2 rounded-[10px] border border-bordure bg-papier px-3.5 text-[13px] font-medium lg:ml-auto">
           <Icon name="calendar" className="size-4" />
-          100 dernières entrées
-        </span>
+          <span className="sr-only">Période</span>
+          <select
+            value={periode}
+            onChange={(e) => {
+              setEtat("Chargement…");
+              setPage(1);
+              setPeriode(Number(e.target.value) as 1 | 7 | 30);
+            }}
+            className="cursor-pointer bg-transparent outline-none"
+          >
+            <option value={1}>Aujourd&apos;hui</option>
+            <option value={7}>7 derniers jours</option>
+            <option value={30}>30 derniers jours</option>
+          </select>
+        </label>
       </div>
       <Tableau colonnes={COLONNES} entetes={["HEURE", "ACTEUR", "MODULE", "ACTION", "OBJET"]} largeurMin={820}>
         {visibles.map((l, i) => (
@@ -154,6 +172,11 @@ export function Journal() {
         ))}
         {visibles.length === 0 ? <p className="px-5 py-6 text-center text-sm text-texte-3">{etat ?? "Aucune entrée."}</p> : null}
       </Tableau>
+      {suite ? (
+        <Bouton variante="contour" className="self-center" onClick={() => setPage((n) => n + 1)}>
+          Charger plus
+        </Bouton>
+      ) : null}
     </>
   );
 }

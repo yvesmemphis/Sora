@@ -89,6 +89,30 @@ export function Parametres() {
             ))}
             <div className="flex flex-wrap items-center justify-between gap-4 border-t border-ligne-3 py-3.5">
               <div className="flex max-w-[560px] flex-col gap-0.5">
+                <label htmlFor="param-desistement" className="text-sm font-bold">
+                  Délai de désistement
+                </label>
+                <span className="text-xs leading-[17px] text-texte-3">
+                  Temps pendant lequel le client peut annuler sa commande QR depuis l&apos;écran de suivi.
+                </span>
+              </div>
+              <select
+                id="param-desistement"
+                value={valeurs.withdrawal_delay_minutes}
+                onChange={(e) => changer("withdrawal_delay_minutes", Number(e.target.value))}
+                className="h-10 min-w-[140px] cursor-pointer rounded-[10px] border border-bordure-2 bg-papier px-3 text-center text-sm font-bold outline-none"
+              >
+                {[...new Set([0, 3, 5, 10, 15, valeurs.withdrawal_delay_minutes])]
+                  .sort((a, b) => a - b)
+                  .map((m) => (
+                    <option key={m} value={m}>
+                      {m === 0 ? "Aucun" : `${m} min`}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 border-t border-ligne-3 py-3.5">
+              <div className="flex max-w-[560px] flex-col gap-0.5">
                 <label htmlFor="param-peremption" className="text-sm font-bold">
                   Alerte de péremption
                 </label>
