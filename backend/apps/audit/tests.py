@@ -107,3 +107,24 @@ def test_analytics_module_filter_and_csv_export_use_server_query_filters():
     assert exported.status_code == 200
     assert "analytics.forecast.reject" in content
     assert "payment.registered" not in content
+
+
+def test_module_filter_matches_label_lower_resource_types():
+    actor = UserFactory(role=Role.ADMIN)
+    order_event = AuditEvent.objects.create(
+        actor=actor,
+        action="order.status_changed",
+        resource_type="orders.order",
+    )
+    AuditEvent.objects.create(
+        actor=actor,
+        action="payment.registered",
+        resource_type="payments.payment",
+    )
+    client = APIClient()
+    client.force_authenticate(actor)
+
+    response = client.get(reverse("audit-list"), {"module": "orders"})
+
+    assert response.status_code == 200
+    assert [event["id"] for event in response.data["results"]] == [str(order_event.pk)]

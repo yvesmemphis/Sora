@@ -1,8 +1,8 @@
 from django.urls import path
 
 from .views import (
-    OrderPaymentsView,
     CashRegisterClosureView,
+    OrderPaymentsView,
     PaymentDailyReportView,
     PaymentRefundsView,
     RefundProcessView,

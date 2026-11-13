@@ -82,6 +82,8 @@ MIDDLEWARE = [
 
 # Le front envoie `Idempotency-Key` sur les créations de commande (POST /orders/, /public/orders/).
 CORS_ALLOW_HEADERS = (*default_headers, "idempotency-key")
+# Lus par le front sur les QR (URL encodée) et les exports CSV (nom du fichier).
+CORS_EXPOSE_HEADERS = ["X-QR-Target", "Content-Disposition"]
 
 ROOT_URLCONF = "config.urls"
 ASGI_APPLICATION = "config.asgi.application"

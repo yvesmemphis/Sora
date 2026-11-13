@@ -1,8 +1,9 @@
 from io import BytesIO
+from urllib.parse import quote
 
 import qrcode
+from django.conf import settings
 from django.http import HttpResponse
-from django.urls import reverse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers, status
@@ -112,9 +113,8 @@ class PublicTrackQrView(APIView):
     @extend_schema(responses={(200, "image/png"): OpenApiTypes.BINARY})
     def get(self, request, token):
         order_from_tracking_token(token)
-        target_url = request.build_absolute_uri(
-            reverse("orders:public-track", args=[token])
-        )
+        # Le QR ouvre la page de suivi du frontend, qui interroge l'API publique.
+        target_url = f"{settings.FRONTEND_URL.rstrip('/')}/suivi/{quote(token, safe='')}"
         image = qrcode.make(target_url)
         buffer = BytesIO()
         image.save(buffer, format="PNG")

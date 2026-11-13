@@ -83,7 +83,10 @@ def filter_audit_queryset(queryset, query_params):
     if "module" in filters:
         module = filters["module"]
         queryset = queryset.filter(
-            Q(resource_type__startswith=f"apps.{module}.")
+            # `audit.log` enregistre `_meta.label_lower` (ex. « orders.order ») ;
+            # l'ancien préfixe « apps. » reste reconnu.
+            Q(resource_type__startswith=f"{module}.")
+            | Q(resource_type__startswith=f"apps.{module}.")
             | Q(action__startswith=f"{module}.")
         )
     if "action" in filters:

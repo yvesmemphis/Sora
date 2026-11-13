@@ -152,7 +152,7 @@ def test_public_tracking_qr_encodes_the_signed_tracking_url():
     assert response.status_code == 200
     assert response["Content-Type"] == "image/png"
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
-    assert "/public/track/" in response["X-QR-Target"]
+    assert "/suivi/" in response["X-QR-Target"]
 
 
 def test_client_can_cancel_public_order_within_withdrawal_window():

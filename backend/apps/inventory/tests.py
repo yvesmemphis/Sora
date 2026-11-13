@@ -455,6 +455,24 @@ def test_order_uses_recipe_version_valid_at_its_creation_time():
         actor=actor,
     )
 
+    # Horodatages explicites : sous Windows, deux `timezone.now()` successifs
+    # peuvent être égaux et rendre la frontière entre versions ambiguë.
+    from django.utils import timezone
+
+    from .models import RecipeVersion
+
+    now = timezone.now()
+    RecipeVersion.objects.filter(pk=old_recipe.pk).update(
+        valid_from=now - timedelta(hours=2), valid_until=now - timedelta(hours=1)
+    )
+    RecipeVersion.objects.filter(pk=new_recipe.pk).update(
+        valid_from=now - timedelta(hours=1)
+    )
+    Order.objects.filter(pk=old_order.pk).update(created_at=now - timedelta(minutes=90))
+    Order.objects.filter(pk=new_order.pk).update(created_at=now - timedelta(minutes=30))
+    old_order.refresh_from_db()
+    new_order.refresh_from_db()
+
     old_consumption = consume_for_order(old_order, actor=actor)
     new_consumption = consume_for_order(new_order, actor=actor)
 
@@ -491,3 +509,25 @@ def test_recipe_shortage_does_not_block_preparation_and_creates_alert():
         is_resolved=False,
     ).exists()
     assert AuditEvent.objects.filter(action="order.stock_shortage").exists()
+
+
+def test_manager_can_receive_a_lot_through_the_api(as_role):
+    ingredient = make_ingredient()
+
+    response = as_role(Role.MANAGER).post(
+        "/api/v1/stock-lots/",
+        {
+            "ingredient": str(ingredient.pk),
+            "quantity_received": "10.000",
+            "cost_per_unit": "3000.00",
+            "date_received": date.today().isoformat(),
+            "date_expiration": (date.today() + timedelta(days=7)).isoformat(),
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert Decimal(response.data["quantity_remaining"]) == Decimal("10.000")
+    assert StockMovement.objects.filter(
+        lot_id=response.data["id"], movement_type="IN"
+    ).exists()

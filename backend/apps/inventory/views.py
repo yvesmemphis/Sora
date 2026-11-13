@@ -88,7 +88,10 @@ class StockLotViewSet(
     def create(self, request, *args, **kwargs):
         serializer = StockLotCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        lot = services.receive_lot(**serializer.validated_data, actor=request.user)
+        values = serializer.validated_data.copy()
+        # Le contrat d'API expose `quantity_received`; le service attend `quantity`.
+        values["quantity"] = values.pop("quantity_received")
+        lot = services.receive_lot(**values, actor=request.user)
         return Response(
             StockLotSerializer(lot).data,
             status=status.HTTP_201_CREATED,

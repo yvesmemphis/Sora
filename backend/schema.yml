@@ -84,10 +84,6 @@ paths:
     get:
       operationId: audit_list
       parameters:
-      - in: query
-        name: action
-        schema:
-          type: string
       - name: page
         required: false
         in: query
@@ -100,10 +96,6 @@ paths:
         description: Nombre de résultats à retourner par page.
         schema:
           type: integer
-      - in: query
-        name: result
-        schema:
-          type: string
       tags:
       - audit
       security:
@@ -135,6 +127,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditEvent'
+          description: ''
+  /api/v1/audit/export/:
+    get:
+      operationId: audit_export_retrieve
+      description: Exporte le journal filtré au format CSV.
+      tags:
+      - audit
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
           description: ''
   /api/v1/auth/login/:
     post:
@@ -268,6 +276,52 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /api/v1/cash-register/closures/:
+    get:
+      operationId: cash_register_closures_list
+      parameters:
+      - in: query
+        name: date
+        schema:
+          type: string
+          format: date
+      tags:
+      - cash-register
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CashRegisterClosure'
+          description: ''
+    post:
+      operationId: cash_register_closures_create
+      tags:
+      - cash-register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CashRegisterClosureCreateRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CashRegisterClosureCreateRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CashRegisterClosureCreateRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CashRegisterClosure'
           description: ''
   /api/v1/categories/:
     get:
@@ -412,6 +466,18 @@ paths:
     get:
       operationId: dishes_list
       parameters:
+      - in: query
+        name: availability_status
+        schema:
+          type: string
+          enum:
+          - AVAILABLE
+          - SOLD_OUT
+          - TEMPORARILY_UNAVAILABLE
+        description: |-
+          * `AVAILABLE` - Disponible
+          * `SOLD_OUT` - Épuisé
+          * `TEMPORARILY_UNAVAILABLE` - Temporairement indisponible
       - in: query
         name: category
         schema:
@@ -1010,6 +1076,30 @@ paths:
   /api/v1/orders/:
     get:
       operationId: orders_list
+      description: Filtrer par statut, date ou date de création. L'envoi de page ou
+        page_size active la pagination; sans ces paramètres la réponse reste une liste
+        pour compatibilité.
+      parameters:
+      - in: query
+        name: created_after
+        schema:
+          type: string
+      - in: query
+        name: date
+        schema:
+          type: string
+      - in: query
+        name: page
+        schema:
+          type: integer
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+      - in: query
+        name: status
+        schema:
+          type: string
       tags:
       - orders
       security:
@@ -1122,6 +1212,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/Order'
           description: ''
+  /api/v1/orders/{id}/location/:
+    patch:
+      operationId: orders_location_partial_update
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          pattern: ^\d+$
+        required: true
+      tags:
+      - orders
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedOrderRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedOrderRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedOrderRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+          description: ''
   /api/v1/orders/{id}/transition/:
     post:
       operationId: orders_transition_create
@@ -1134,6 +1256,17 @@ paths:
         required: true
       tags:
       - orders
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
       security:
       - jwtAuth: []
       responses:
@@ -1142,6 +1275,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Order'
+          description: ''
+  /api/v1/payments/:
+    get:
+      operationId: payments_retrieve
+      description: Retourne les paiements créés à la date demandée et les montants
+        encaissés/remboursés regroupés par mode et devise.
+      parameters:
+      - in: query
+        name: date
+        schema:
+          type: string
+        description: Date des paiements à consulter, au format AAAA-MM-JJ.
+        required: true
+      tags:
+      - payments
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentDailyReport'
           description: ''
   /api/v1/payments/{payment_id}/refunds/:
     post:
@@ -1344,6 +1500,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/PublicMenuResponse'
           description: ''
+  /api/v1/public/menu/qr/:
+    get:
+      operationId: public_menu_qr_retrieve
+      parameters:
+      - in: query
+        name: location_id
+        schema:
+          type: string
+          format: uuid
+      - in: query
+        name: mode
+        schema:
+          enum:
+          - DINE_IN
+          - ROOM
+          - TAKEAWAY
+          type: string
+          default: TAKEAWAY
+          minLength: 1
+        description: |-
+          * `DINE_IN` - Dine In
+          * `ROOM` - Room
+          * `TAKEAWAY` - Takeaway
+      tags:
+      - public
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+          description: ''
   /api/v1/public/orders/:
     post:
       operationId: public_orders_create
@@ -1395,6 +1586,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TrackOrder'
+          description: ''
+  /api/v1/public/track/{token}/cancel/:
+    post:
+      operationId: public_track_cancel_create
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      tags:
+      - public
+      security:
+      - {}
+      responses:
+        '204':
+          description: No response body
+  /api/v1/public/track/{token}/qr/:
+    get:
+      operationId: public_track_qr_retrieve
+      parameters:
+      - in: path
+        name: token
+        schema:
+          type: string
+        required: true
+      tags:
+      - public
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
           description: ''
   /api/v1/recipe-consumptions/:
     get:
@@ -1700,8 +1928,7 @@ paths:
       - in: path
         name: id
         schema:
-          type: string
-          format: uuid
+          type: integer
         required: true
       tags:
       - staff
@@ -1720,8 +1947,7 @@ paths:
       - in: path
         name: id
         schema:
-          type: string
-          format: uuid
+          type: integer
         required: true
       tags:
       - staff
@@ -1736,6 +1962,38 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/PatchedStaffRequest'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Staff'
+          description: ''
+  /api/v1/staff/{id}/resend-invitation/:
+    post:
+      operationId: staff_resend_invitation_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        required: true
+      tags:
+      - staff
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StaffRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/StaffRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/StaffRequest'
+        required: true
       security:
       - jwtAuth: []
       responses:
@@ -2275,6 +2533,70 @@ components:
       - actor_email
       - created_at
       - id
+    AvailabilityStatusEnum:
+      enum:
+      - AVAILABLE
+      - SOLD_OUT
+      - TEMPORARILY_UNAVAILABLE
+      type: string
+      description: |-
+        * `AVAILABLE` - Disponible
+        * `SOLD_OUT` - Épuisé
+        * `TEMPORARILY_UNAVAILABLE` - Temporairement indisponible
+    BlankEnum:
+      enum:
+      - ''
+    CashRegisterClosure:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        closed_for:
+          type: string
+          format: date
+          readOnly: true
+        closed_by_email:
+          type: string
+          format: email
+          readOnly: true
+        expected_totals:
+          readOnly: true
+        expected_cash:
+          readOnly: true
+        counted_cash:
+          readOnly: true
+        closed_at:
+          type: string
+          format: date-time
+          readOnly: true
+        notes:
+          type: string
+          readOnly: true
+      required:
+      - closed_at
+      - closed_by_email
+      - closed_for
+      - counted_cash
+      - expected_cash
+      - expected_totals
+      - id
+      - notes
+    CashRegisterClosureCreateRequest:
+      type: object
+      properties:
+        closed_for:
+          type: string
+          format: date
+        counted_cash:
+          type: object
+          additionalProperties:
+            type: string
+            format: decimal
+            pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        notes:
+          type: string
+          maxLength: 500
     Category:
       type: object
       properties:
@@ -2340,6 +2662,8 @@ components:
         allergens: {}
         is_available:
           type: boolean
+        availability_status:
+          $ref: '#/components/schemas/AvailabilityStatusEnum'
         is_published:
           type: boolean
         image:
@@ -2377,6 +2701,8 @@ components:
         allergens: {}
         is_available:
           type: boolean
+        availability_status:
+          $ref: '#/components/schemas/AvailabilityStatusEnum'
         is_published:
           type: boolean
         image:
@@ -2632,12 +2958,23 @@ components:
         id:
           type: integer
           readOnly: true
+        order_id:
+          type: integer
+          readOnly: true
         order_number:
           type: string
           readOnly: true
         table_number:
           type: integer
           readOnly: true
+        location_type:
+          type: string
+          readOnly: true
+          nullable: true
+        location_reference:
+          type: string
+          readOnly: true
+          nullable: true
         items:
           type: array
           items:
@@ -2659,6 +2996,9 @@ components:
       - created_at
       - id
       - items
+      - location_reference
+      - location_type
+      - order_id
       - order_number
       - status
       - table_number
@@ -2802,6 +3142,14 @@ components:
           format: uuid
           readOnly: true
           nullable: true
+        location_type:
+          type: string
+          readOnly: true
+          nullable: true
+        location_reference:
+          type: string
+          readOnly: true
+          nullable: true
         source:
           type: string
           readOnly: true
@@ -2833,6 +3181,21 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           readOnly: true
+        currency:
+          type: string
+          readOnly: true
+        payment_method_expected:
+          oneOf:
+          - $ref: '#/components/schemas/PaymentMethodEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        amount_paid:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          readOnly: true
+        is_paid:
+          type: boolean
+          readOnly: true
         discount:
           type: string
           format: decimal
@@ -2855,19 +3218,30 @@ components:
           items:
             $ref: '#/components/schemas/OrderItem'
           readOnly: true
+        status_history:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderStatusHistory'
+          readOnly: true
       required:
+      - amount_paid
       - created_at
+      - currency
       - customer_name
       - customer_phone
       - discount
       - id
+      - is_paid
       - items
       - location
+      - location_reference
+      - location_type
       - mode
       - notes
       - number
       - source
       - status
+      - status_history
       - subtotal
       - table_number
       - tax
@@ -2884,6 +3258,10 @@ components:
           allOf:
           - $ref: '#/components/schemas/ModeEnum'
           default: TAKEAWAY
+        payment_method_expected:
+          oneOf:
+          - $ref: '#/components/schemas/PaymentMethodEnum'
+          - $ref: '#/components/schemas/BlankEnum'
         location:
           type: string
           format: uuid
@@ -2977,6 +3355,13 @@ components:
       required:
       - dish_id
       - quantity
+    OrderRequest:
+      type: object
+      properties:
+        payment_method_expected:
+          oneOf:
+          - $ref: '#/components/schemas/PaymentMethodEnum'
+          - $ref: '#/components/schemas/BlankEnum'
     OrderStatusEnum:
       enum:
       - RECEIVED
@@ -2999,6 +3384,29 @@ components:
         * `COMPLETED` - Completed
         * `CANCELLED` - Cancelled
         * `REJECTED` - Rejected
+    OrderStatusHistory:
+      type: object
+      properties:
+        from_status:
+          type: string
+          readOnly: true
+          nullable: true
+        to_status:
+          type: string
+          readOnly: true
+        changed_at:
+          type: string
+          format: date-time
+          readOnly: true
+        note:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - changed_at
+      - from_status
+      - note
+      - to_status
     OverviewResponse:
       type: object
       properties:
@@ -3022,6 +3430,26 @@ components:
             type: string
         daily_order_count:
           type: integer
+        popular_dishes:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        orders_by_hour:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        average_baskets:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+        margins_and_costs:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
     PaginatedAuditEventList:
       type: object
       required:
@@ -3456,6 +3884,8 @@ components:
         allergens: {}
         is_available:
           type: boolean
+        availability_status:
+          $ref: '#/components/schemas/AvailabilityStatusEnum'
         is_published:
           type: boolean
         image:
@@ -3501,6 +3931,13 @@ components:
           maxLength: 30
         is_active:
           type: boolean
+    PatchedOrderRequest:
+      type: object
+      properties:
+        payment_method_expected:
+          oneOf:
+          - $ref: '#/components/schemas/PaymentMethodEnum'
+          - $ref: '#/components/schemas/BlankEnum'
     PatchedProductionBatchUpdateRequest:
       type: object
       properties:
@@ -3528,11 +3965,27 @@ components:
           type: boolean
         public_ordering_enabled:
           type: boolean
+        withdrawal_delay_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
         expiry_alert_days:
           type: integer
           maximum: 9223372036854775807
           minimum: 0
           format: int64
+        opening_hours:
+          type: object
+          additionalProperties: {}
+        accepted_payment_methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentMethodEnum'
+        currency:
+          type: string
+          minLength: 1
+          maxLength: 3
     PatchedStaffRequest:
       type: object
       properties:
@@ -3624,14 +4077,11 @@ components:
           readOnly: true
         payment_method:
           allOf:
-          - $ref: '#/components/schemas/PaymentPaymentMethodEnum'
+          - $ref: '#/components/schemas/PaymentMethodEnum'
           readOnly: true
           description: |-
-            Ex: carte_bleue, virement, espece
+            Canonical payment method code.
 
-            * `carte_bleue` - Carte
-            * `virement` - Virement
-            * `espece` - Espèces
             * `card` - Card
             * `cash` - Cash
             * `bank_transfer` - Bank transfer
@@ -3660,24 +4110,6 @@ components:
       - payment_method
       - reference
       - status
-    PaymentCreatePaymentMethodEnum:
-      enum:
-      - carte_bleue
-      - virement
-      - espece
-      - card
-      - cash
-      - bank_transfer
-      - other
-      type: string
-      description: |-
-        * `carte_bleue` - carte_bleue
-        * `virement` - virement
-        * `espece` - espece
-        * `card` - card
-        * `cash` - cash
-        * `bank_transfer` - bank_transfer
-        * `other` - other
     PaymentCreateRequest:
       type: object
       properties:
@@ -3686,27 +4118,65 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
         payment_method:
-          $ref: '#/components/schemas/PaymentCreatePaymentMethodEnum'
+          $ref: '#/components/schemas/PaymentMethodEnum'
         reference:
           type: string
           maxLength: 64
       required:
       - amount
       - payment_method
-    PaymentPaymentMethodEnum:
+    PaymentDailyReport:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+        totals:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentDailyTotal'
+      required:
+      - date
+      - payments
+      - totals
+    PaymentDailyTotal:
+      type: object
+      properties:
+        payment_method:
+          type: string
+        currency:
+          type: string
+          maxLength: 3
+        gross_collected:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,2})?$
+        refunded:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,2})?$
+        net_collected:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,12}(?:\.\d{0,2})?$
+      required:
+      - currency
+      - gross_collected
+      - net_collected
+      - payment_method
+      - refunded
+    PaymentMethodEnum:
       enum:
-      - carte_bleue
-      - virement
-      - espece
       - card
       - cash
       - bank_transfer
       - other
       type: string
       description: |-
-        * `carte_bleue` - Carte
-        * `virement` - Virement
-        * `espece` - Espèces
         * `card` - Card
         * `cash` - Cash
         * `bank_transfer` - Bank transfer
@@ -3861,6 +4331,16 @@ components:
         category:
           type: string
           readOnly: true
+        is_available:
+          type: boolean
+        availability_status:
+          $ref: '#/components/schemas/AvailabilityStatusEnum'
+        preparation_time:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          nullable: true
       required:
       - category
       - id
@@ -3873,14 +4353,27 @@ components:
           type: string
         ordering_enabled:
           type: boolean
+        withdrawal_delay_minutes:
+          type: integer
+        opening_hours: {}
+        accepted_payment_methods:
+          type: array
+          items:
+            type: string
+        currency:
+          type: string
         dishes:
           type: array
           items:
             $ref: '#/components/schemas/PublicDish'
       required:
+      - accepted_payment_methods
+      - currency
       - dishes
       - name
+      - opening_hours
       - ordering_enabled
+      - withdrawal_delay_minutes
     PublicOrderRequest:
       type: object
       properties:
@@ -3888,6 +4381,10 @@ components:
           $ref: '#/components/schemas/ModeEnum'
         location:
           $ref: '#/components/schemas/LocationRefRequest'
+        payment_method_expected:
+          oneOf:
+          - $ref: '#/components/schemas/PaymentMethodEnum'
+          - $ref: '#/components/schemas/BlankEnum'
         note:
           type: string
           maxLength: 300
@@ -3907,12 +4404,22 @@ components:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        currency:
+          type: string
+          maxLength: 3
+        payment_method_expected:
+          type: string
+        withdrawal_delay_minutes:
+          type: integer
         tracking_token:
           type: string
       required:
+      - currency
       - number
+      - payment_method_expected
       - total
       - tracking_token
+      - withdrawal_delay_minutes
     RecipeConsumption:
       type: object
       description: Sérialiseur pour le modèle RecipeConsumption.
@@ -4066,6 +4573,9 @@ components:
         payment_order_id:
           type: string
           readOnly: true
+        currency:
+          type: string
+          readOnly: true
         amount:
           type: string
           format: decimal
@@ -4092,6 +4602,7 @@ components:
       required:
       - amount
       - created_at
+      - currency
       - id
       - payment
       - payment_order_id
@@ -4160,11 +4671,28 @@ components:
           type: boolean
         public_ordering_enabled:
           type: boolean
+        withdrawal_delay_minutes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
         expiry_alert_days:
           type: integer
           maximum: 9223372036854775807
           minimum: 0
           format: int64
+        opening_hours:
+          type: object
+          additionalProperties: {}
+        accepted_payment_methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaymentMethodEnum'
+        currency:
+          type: string
+          maxLength: 3
+      required:
+      - accepted_payment_methods
     Staff:
       type: object
       properties:
@@ -4191,10 +4719,14 @@ components:
           title: Actif
           description: Précise si l’utilisateur doit être considéré comme actif. Décochez
             ceci plutôt que de supprimer le compte.
+        is_invited:
+          type: boolean
+          readOnly: true
       required:
       - email
       - id
       - is_active
+      - is_invited
     StaffRequest:
       type: object
       properties:
@@ -4525,18 +5057,40 @@ components:
           type: string
         status:
           type: string
+        payment_method_expected:
+          type: string
         created_at:
           type: string
           format: date-time
+        withdrawal_delay_minutes:
+          type: integer
+        withdrawal_deadline:
+          type: string
+          format: date-time
+        can_cancel:
+          type: boolean
+        total:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+        currency:
+          type: string
+          maxLength: 3
         items:
           type: array
           items:
             $ref: '#/components/schemas/TrackItem'
       required:
+      - can_cancel
       - created_at
+      - currency
       - items
       - number
+      - payment_method_expected
       - status
+      - total
+      - withdrawal_deadline
+      - withdrawal_delay_minutes
     TypeEnum:
       enum:
       - TABLE

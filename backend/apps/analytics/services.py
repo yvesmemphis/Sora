@@ -138,7 +138,7 @@ def overview(start_date, end_date):
     missing_recipe_orders = set(
         AuditEvent.objects.filter(
             action="inventory.recipe_missing",
-            resource_type="apps.orders.order",
+            resource_type__in=["orders.order", "apps.orders.order"],
             resource_id__in=[str(order_id) for order_id in completed_order_ids],
         ).values_list("resource_id", flat=True)
     )

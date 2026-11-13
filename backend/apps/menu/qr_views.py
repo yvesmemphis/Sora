@@ -55,15 +55,17 @@ class MenuQrView(APIView):
         query.is_valid(raise_exception=True)
         values = query.validated_data
         menu_api = request.build_absolute_uri(reverse("menu:public-menu"))
-        parameters = {
-            "menu_api": menu_api,
-            "mode": values["mode"],
-        }
+        # Le frontend ouvre la carte sur /menu et lit `table` ou `chambre`
+        # (voir frontend/src/lib/client/menu.tsx).
+        parameters = {}
         location = values.get("location")
-        if location:
-            parameters["location_type"] = location.type
-            parameters["location_reference"] = location.reference
-        target_url = f"{settings.FRONTEND_URL.rstrip('/')}/?{urlencode(parameters)}"
+        if location and location.type == LocationType.TABLE:
+            parameters["table"] = location.reference
+        elif location and location.type == LocationType.ROOM:
+            parameters["chambre"] = location.reference
+        parameters["mode"] = values["mode"]
+        parameters["menu_api"] = menu_api
+        target_url = f"{settings.FRONTEND_URL.rstrip('/')}/menu?{urlencode(parameters)}"
 
         image = qrcode.make(target_url)
         buffer = BytesIO()
