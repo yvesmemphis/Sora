@@ -156,6 +156,10 @@ export function TableauDeBord() {
   }, [commandes, previsions]);
 
   const plusVendus = useMemo(() => {
+    // Calcul serveur (commandes servies ou clôturées) quand il est disponible.
+    if (courant?.popular_dishes) {
+      return courant.popular_dishes.slice(0, 5).map((d) => ({ nom: d.menu_item_name, portions: d.quantity }));
+    }
     const parPlat = new Map<string, number>();
     for (const c of commandes) {
       if (c.status === "CANCELLED" || c.status === "REJECTED" || dateIso(new Date(c.created_at)) < debutPeriode) continue;
@@ -165,7 +169,7 @@ export function TableauDeBord() {
       .map(([nom, portions]) => ({ nom, portions }))
       .sort((a, b) => b.portions - a.portions)
       .slice(0, 5);
-  }, [commandes, debutPeriode]);
+  }, [commandes, debutPeriode, courant]);
 
   // Invendus et pertes de la période (déclarations de production).
   const pertes = useMemo(() => {
@@ -186,8 +190,17 @@ export function TableauDeBord() {
   const nbPrec = precedent?.orders?.total ?? 0;
   const clos = courant?.orders?.completed ?? 0;
   const closPrec = precedent?.orders?.completed ?? 0;
-  const panier = clos ? ca / clos : 0;
-  const panierPrec = closPrec ? caPrec / closPrec : 0;
+  const panierServeur = (a: ApercuApi | null) => {
+    const ligne = a?.average_baskets?.find((b) => b.currency === "XOF") ?? a?.average_baskets?.[0];
+    return ligne ? montant(ligne.average_subtotal) : null;
+  };
+  const panier = panierServeur(courant) ?? (clos ? ca / clos : 0);
+  const panierPrec = panierServeur(precedent) ?? (closPrec ? caPrec / closPrec : 0);
+  const marge = courant?.margins_and_costs?.find((m) => m.currency === "XOF") ?? courant?.margins_and_costs?.[0];
+  const pointe = courant?.orders_by_hour?.reduce<{ hour: string; count: number } | null>(
+    (best, h) => (h.count > (best?.count ?? 0) ? h : best),
+    null,
+  );
   const variation = (a: number, b: number) => (b ? Math.round(((a - b) / b) * 100) : null);
   const libellePrec = periode === "jour" ? "hier" : periode === "semaine" ? "semaine précédente" : "30 jours précédents";
 
@@ -208,6 +221,19 @@ export function TableauDeBord() {
     { libelle: "Taux d'annulation", detail: "commandes annulées", valeur: pct(courant?.orders?.cancelled ?? 0, nb) },
     { libelle: "Commandes clôturées", detail: "servies et soldées", valeur: pct(clos, nb) },
     { libelle: "Taux de pertes", detail: "jeté / préparé", valeur: pct(pertes.jete, pertes.prepare) },
+    {
+      libelle: "Marge brute estimée",
+      detail: marge
+        ? marge.gross_margin === null
+          ? `recettes couvertes à ${Math.round(montant(marge.cost_coverage) * 100)} %`
+          : `coût matière ${formatNombre(montant(marge.estimated_cost))} FCFA`
+        : "aucune vente clôturée",
+      valeur:
+        marge && marge.gross_margin !== null && montant(marge.sales) > 0
+          ? pct(montant(marge.gross_margin), montant(marge.sales))
+          : "—",
+    },
+    { libelle: "Heure de pointe", detail: "commandes passées", valeur: pointe ? `${pointe.hour} · ${pointe.count}` : "—" },
   ];
 
   const reco = previsions.find((p) => p.status === "DRAFT");

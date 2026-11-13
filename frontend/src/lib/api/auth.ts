@@ -1,5 +1,5 @@
 import type { RoleBackend } from "../types";
-import { api, enregistrerJetons, lireJetons, type Jetons } from "./client";
+import { api, enregistrerAcces } from "./client";
 
 /** Profil renvoyé par `GET /auth/me/`. */
 export interface Moi {
@@ -19,12 +19,14 @@ export const ACCUEIL_PAR_ROLE: Record<RoleBackend, string> = {
 };
 
 export async function connexion(email: string, motDePasse: string): Promise<Moi> {
-  const jetons = await api<Jetons>("/auth/login/", {
+  // Le rafraîchissement arrive en cookie HttpOnly (+ cookie `csrftoken`).
+  const { access } = await api<{ access: string }>("/auth/login/", {
     method: "POST",
     auth: false,
+    cookies: true,
     body: { email, password: motDePasse },
   });
-  enregistrerJetons(jetons);
+  enregistrerAcces(access);
   return moi();
 }
 
@@ -33,11 +35,11 @@ export function moi(): Promise<Moi> {
 }
 
 export async function deconnexion(): Promise<void> {
-  const jetons = lireJetons();
   try {
-    if (jetons?.refresh) await api("/auth/logout/", { method: "POST", body: { refresh: jetons.refresh } });
+    // Révoque le cookie de rafraîchissement côté serveur (CSRF requis).
+    await api("/auth/logout/", { method: "POST", cookies: true });
   } finally {
-    enregistrerJetons(null);
+    enregistrerAcces(null);
   }
 }
 

@@ -14,10 +14,10 @@ import { ACTUALISATION_MS, COULEUR_HISTORIQUE, MODES_PAIEMENT, MODES_SERVICE, ST
 import type { EvenementCommande, StatutCommande } from "@/lib/types";
 
 /**
- * Délai de désistement : réglage `withdrawal_delay_minutes` du backend (5 min par défaut).
- * Il n'est pas encore exposé publiquement ; le serveur reste juge (erreur 409 au-delà).
+ * Délai de désistement par défaut, si le suivi ne renvoie pas `withdrawal_delay_minutes`
+ * (figé sur la commande à sa création). Le serveur reste juge (erreur 409 au-delà).
  */
-const DELAI_DESISTEMENT_SEC = 5 * 60;
+const DELAI_DESISTEMENT_DEFAUT_MIN = 5;
 
 const TERMINAUX: StatutCommande[] = ["servie", "cloturee", "annulee", "refusee"];
 
@@ -162,7 +162,13 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
   const lieu = !locale || !mode ? "" : locale.mode === "emporter" ? "à emporter" : mode.court(locale.emplacement).toLowerCase();
   const paiement = modePaiementDe(suivi.payment_method_expected) ?? locale?.paiement;
   const total = suivi.total !== undefined ? montant(suivi.total) : locale?.total;
-  const restant = maintenant ? DELAI_DESISTEMENT_SEC - (maintenant - new Date(suivi.created_at).getTime()) / 1000 : DELAI_DESISTEMENT_SEC;
+  const delaiSec = (suivi.withdrawal_delay_minutes ?? DELAI_DESISTEMENT_DEFAUT_MIN) * 60;
+  const echeance = suivi.withdrawal_deadline
+    ? new Date(suivi.withdrawal_deadline).getTime()
+    : new Date(suivi.created_at).getTime() + delaiSec * 1000;
+  const restantBrut = maintenant ? (echeance - maintenant) / 1000 : delaiSec;
+  // `can_cancel` (serveur) prime : faux dès que le délai est dépassé côté API.
+  const restant = suivi.can_cancel === false ? 0 : Math.min(delaiSec, restantBrut);
 
   const recap = (
     <div className="tabular flex flex-col gap-2.5 rounded-2xl border border-ligne bg-papier p-3.5 text-[15px]">
@@ -256,7 +262,7 @@ export function SuiviCommande({ params }: { params: Promise<{ jeton: string }> }
             <div className="h-1.5 overflow-hidden rounded-[3px] bg-creme/20">
               <div
                 className="h-1.5 rounded-[3px] bg-or transition-[width] duration-1000 ease-linear"
-                style={{ width: `${(restant / DELAI_DESISTEMENT_SEC) * 100}%` }}
+                style={{ width: `${Math.max(0, restant / delaiSec) * 100}%` }}
               />
             </div>
             <p className="m-0 text-sm leading-5 text-[#E4E9E5]">

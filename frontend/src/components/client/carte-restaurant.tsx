@@ -4,10 +4,11 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/ui/icon";
 import { Badge, Logo, cx } from "@/components/ui/primitives";
+import { horairesDuJour } from "@/lib/api/menu";
 import { memoriserEmplacementQr, useMenu } from "@/lib/client/menu";
 import { usePanier } from "@/lib/client/panier";
 import { formatFCFA } from "@/lib/format";
-import { DISPONIBILITES } from "@/lib/statuts";
+import { DISPONIBILITES, MODES_PAIEMENT } from "@/lib/statuts";
 import type { Categorie } from "@/lib/types";
 import { BarrePanier } from "./barre-panier";
 
@@ -22,6 +23,15 @@ export function CarteRestaurant() {
   const [recherche, setRecherche] = useState("");
   // Plat mis en avant : le premier de la catégorie « Plats », s'il existe.
   const platDuJour = PLATS.find((p) => p.categorie === "Plats" && p.disponibilite === "disponible");
+
+  const [salutation, setSalutation] = useState("Bonjour.");
+  useEffect(() => {
+    // Heure du navigateur, lue après le rendu serveur.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- dépend de l'heure locale
+    setSalutation(new Date().getHours() >= 17 ? "Bonsoir." : "Bonjour.");
+  }, []);
+  const horaires = menu ? horairesDuJour(menu.horaires) : null;
+  const paiements = menu?.modesPaiement.map((m) => MODES_PAIEMENT[m].libelle.toLowerCase()).join(" ou ");
 
   // QR code de table ou de chambre : `/menu?table=T6`.
   useEffect(() => memoriserEmplacementQr(new URLSearchParams(window.location.search)), []);
@@ -53,14 +63,16 @@ export function CarteRestaurant() {
 
         <div className="flex flex-col gap-1.5">
           <h1 className="m-0 font-serif text-[28px] leading-[34px] font-semibold text-vert">
-            Bonsoir.
+            {salutation}
             <br />
-            Voici la carte du soir.
+            Voici la carte{menu?.nomRestaurant ? ` · ${menu.nomRestaurant}` : ""}.
           </h1>
-          <p className="flex items-center gap-1.5 text-[13px] text-texte-3">
-            <Icon name="clock" className="size-[15px]" />
-            Service de 19 h à 23 h · paiement espèces ou carte
-          </p>
+          {horaires || paiements ? (
+            <p className="flex items-center gap-1.5 text-[13px] text-texte-3">
+              <Icon name="clock" className="size-[15px]" />
+              {[horaires, paiements ? `paiement ${paiements}` : null].filter(Boolean).join(" · ")}
+            </p>
+          ) : null}
         </div>
 
         {erreur && !menu ? (
@@ -129,8 +141,11 @@ export function CarteRestaurant() {
                 Ajouter
               </button>
             </div>
-            <div className="photo-placeholder-vert flex items-end justify-center p-2.5 font-mono text-[10px] text-[#C9D3CC]">
-              photo 4:3
+            <div
+              className="photo-placeholder-vert flex items-end justify-center bg-cover bg-center p-2.5 font-mono text-[10px] text-[#C9D3CC]"
+              style={platDuJour.image ? { backgroundImage: `url(${JSON.stringify(platDuJour.image)})` } : undefined}
+            >
+              {platDuJour.image ? null : "photo 4:3"}
             </div>
           </div>
         ) : null}

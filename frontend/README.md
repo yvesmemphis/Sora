@@ -64,22 +64,33 @@ Les couleurs, polices et statuts sont définis une seule fois :
 ## Branchement au backend Django
 
 Le client `lib/api/client.ts` cible `NEXT_PUBLIC_API_URL` (par défaut
-`http://127.0.0.1:8000/api/v1`). Le backend autorise déjà `http://localhost:3000` en CORS.
+`http://localhost:8000/api/v1`, voir `.env.example`). Le backend autorise
+`http://localhost:3000` en CORS et en CSRF.
 
-Déjà branché sur l'API existante :
+**Authentification** : `POST /auth/login/` renvoie le jeton d'accès (10 min, gardé en
+`localStorage` sous `sora.acces`) et pose deux cookies : `sora_refresh` (HttpOnly,
+7 jours, rotation) et `csrftoken`. `/auth/refresh/` et `/auth/logout/` envoient les
+cookies (`credentials: "include"`) et l'en-tête `X-CSRFToken`. Le front doit donc lire
+le cookie `csrftoken` : utiliser le **même hôte** pour le front et l'API
+(`localhost:3000` + `localhost:8000`, pas `127.0.0.1` d'un côté et `localhost` de
+l'autre). En production sur deux domaines, configurer `JWT_REFRESH_COOKIE_SAMESITE=None`
+et `Secure` côté backend.
 
-- `POST /auth/login/`, `/auth/refresh/`, `/auth/logout/`, `GET /auth/me/`,
-  `/auth/password-reset/` → `lib/api/auth.ts` et la page `/connexion`.
-  Après connexion, chaque rôle est redirigé vers son espace
-  (`ADMIN` → `/admin`, `MANAGER` → `/gestion`, `WAITER` → `/salle`, `KITCHEN` → `/cuisine`).
-- `/staff/` → `lib/api/personnel.ts` (prêt, l'écran A1 utilise encore les données de démo).
+Tous les écrans parlent à l'API réelle (aucune donnée de démonstration côté front) :
 
-En attente des API métier du backend (`menu`, `orders`, `inventory`, `production`,
-`analytics`, `payments`) : les écrans fonctionnent avec `lib/demo/*`. Pour brancher un domaine,
-remplacer l'import des données de démo par un appel dans `lib/api/` sans toucher aux composants.
+| Espace | Écrans | API principales |
+| --- | --- | --- |
+| Client | `/menu`, `/menu/[slug]`, `/panier`, `/suivi/[jeton]` | `/public/menu/`, `/public/orders/`, `/public/track/{jeton}/` (+ `cancel/`) |
+| Salle | `/salle`, `/salle/nouvelle` | `/orders/`, `/orders/{id}/transition/`, `/orders/{id}/payments/` |
+| Cuisine | `/cuisine` | `/orders/`, `ws/kitchen/`, `/dishes/{id}/availability/` |
+| Gestion | tableau de bord, commandes, menu et recettes, stocks, **référentiel**, production, prévisions, caisse | `/analytics/*`, `/dishes/`, `/categories/`, `/recipe-versions/publish/`, `/suppliers/`, `/ingredients/`, `/stock-lots/` (+ `adjust/`, `waste/`), `/production-batches/`, `/waste-declarations/`, `/payments/`, `/cash-register/closures/` |
+| Admin | utilisateurs, rôles, QR, paramètres, journal | `/staff/`, `/public/menu/qr/`, `/locations/`, `/settings/`, `/audit/`, `/audit/export/` |
 
-À prévoir :
+Démarrer sur une base vide : créer un administrateur (`python manage.py createsuperuser`),
+puis dans l'ordre : **Référentiel** (catégories, fournisseurs, ingrédients, réception de
+lots) → **Menu et recettes** (plats, photo, recette) → **Admin › QR** (tables, chambres,
+QR) → **Admin › Utilisateurs** (invitations du personnel). Le plan de test complet est dans
+`TESTS.md` à la racine du dépôt.
 
-- Protection des routes du personnel selon le rôle (middleware / proxy Next.js).
-- Jetons stockés dans un cookie httpOnly plutôt que `localStorage` avant la production.
-- Temps réel cuisine / salle : actualisation 5 s, puis WebSockets (Django Channels).
+Restent hors périmètre : « Signaler un retard » en cuisine (local à l'écran, pas d'API),
+salle informée par interrogation toutes les 5 s (pas de canal WebSocket côté salle).

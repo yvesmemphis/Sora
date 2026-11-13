@@ -119,6 +119,20 @@ export interface ApercuApi {
   orders?: { total: number; completed: number; cancelled: number };
   payments?: Record<string, number>;
   revenue?: Record<string, string>;
+  /** 10 plats les plus vendus (commandes servies ou clôturées de la période). */
+  popular_dishes?: { menu_item_id: string; menu_item_name: string; quantity: number }[];
+  /** 24 tranches « HH:00 ». */
+  orders_by_hour?: { hour: string; count: number }[];
+  average_baskets?: { currency: string; completed_orders: number; average_subtotal: string }[];
+  /** `gross_margin` vaut null si toutes les commandes n'ont pas de consommation de recette. */
+  margins_and_costs?: {
+    currency: string;
+    cost_currency: string;
+    sales: string;
+    estimated_cost: string;
+    cost_coverage: string;
+    gross_margin: string | null;
+  }[];
 }
 
 /** Dates « AAAA-MM-JJ » en heure locale. */
@@ -154,4 +168,92 @@ export const listerPrevisions = (s?: AbortSignal) => toutesLesPages<PrevisionApi
 
 export function deciderPrevision(id: number, decision: "approve" | "reject", motif = ""): Promise<PrevisionApi> {
   return api<PrevisionApi>(`/analytics/forecasts/${id}/${decision}/`, { method: "POST", body: { reason: motif } });
+}
+
+/* ------------------------------------------------------------ Saisie des référentiels */
+
+export interface FournisseurApi {
+  id: number | string;
+  name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
+  is_active: boolean;
+}
+
+export const listerFournisseurs = (s?: AbortSignal) => toutesLesPages<FournisseurApi>("/suppliers/", s);
+
+export function creerFournisseur(donnees: { name: string; contact_name?: string; email?: string; phone?: string }): Promise<FournisseurApi> {
+  const corps = Object.fromEntries(Object.entries(donnees).filter(([, v]) => v !== undefined && v !== ""));
+  return api<FournisseurApi>("/suppliers/", { method: "POST", body: { ...corps, is_active: true } });
+}
+
+/** Unités de `Ingredient.unit_of_measure`. */
+export const UNITES: { code: string; libelle: string }[] = [
+  { code: "KG", libelle: "kg" },
+  { code: "GR", libelle: "g" },
+  { code: "L", libelle: "L" },
+  { code: "UN", libelle: "unité" },
+  { code: "CS", libelle: "carton" },
+];
+
+export function creerIngredient(donnees: {
+  name: string;
+  unit_of_measure: string;
+  minimum_stock: string;
+  maximum_stock: string;
+  supplier?: number | string | null;
+}): Promise<IngredientApi> {
+  return api<IngredientApi>("/ingredients/", { method: "POST", body: { ...donnees, is_active: true } });
+}
+
+/** Réception d'un lot : crée le mouvement d'entrée et met à jour le coût moyen. */
+export function receptionnerLot(donnees: {
+  ingredient: number | string;
+  supplier?: number | string | null;
+  quantity_received: string;
+  cost_per_unit: string;
+  date_received: string;
+  date_expiration: string;
+}): Promise<LotApi> {
+  return api<LotApi>("/stock-lots/", { method: "POST", body: donnees });
+}
+
+/** Inventaire : quantité réellement comptée dans le lot. */
+export function ajusterLot(id: number | string, quantiteComptee: string, motif: string): Promise<LotApi> {
+  return api<LotApi>(`/stock-lots/${id}/adjust/`, { method: "POST", body: { counted_quantity: quantiteComptee, reason: motif } });
+}
+
+/** Perte (casse, péremption…) sur un lot. */
+export function declarerPerteLot(id: number | string, quantite: string, motif: string): Promise<MouvementApi> {
+  return api<MouvementApi>(`/stock-lots/${id}/waste/`, { method: "POST", body: { quantity: quantite, reason: motif } });
+}
+
+/** Publie une nouvelle version de recette (l'ancienne est close, l'historique conservé). */
+export function publierRecette(donnees: {
+  platId: string;
+  nom: string;
+  lignes: { ingredient: number | string; quantite: string }[];
+  notes?: string;
+}): Promise<RecetteApi> {
+  return api<RecetteApi>("/recipe-versions/publish/", {
+    method: "POST",
+    body: {
+      menu_item_id: donnees.platId,
+      name: donnees.nom.slice(0, 160),
+      notes: donnees.notes ?? "",
+      items: donnees.lignes.map((l) => ({ ingredient: l.ingredient, quantity_required: l.quantite, is_required: true })),
+    },
+  });
+}
+
+export function creerLotProduction(donnees: {
+  product_name: string;
+  production_date: string;
+  quantity_produced: string;
+  unit_cost: string;
+  notes?: string;
+}): Promise<LotProductionApi> {
+  return api<LotProductionApi>("/production-batches/", { method: "POST", body: donnees });
 }

@@ -9,7 +9,9 @@ import {
   heureDe,
   MODE_VERS_BACK,
   modeFront,
+  METHODE_PAIEMENT,
   montant,
+  paiementFront,
   referenceAffichee,
   STATUT_VERS_BACK,
   statutFront,
@@ -22,15 +24,11 @@ import type { EmplacementApi } from "./emplacements";
 
 /* ------------------------------------------------------------ Paiement */
 
-/** Codes de `PAYMENT_METHOD_CHOICES` (backend `common/constants.py`) utilisés par le front. */
-export const METHODE_PAIEMENT: Record<ModePaiement, string> = { especes: "cash", carte: "card" };
+export { METHODE_PAIEMENT } from "./conversions";
 
 /** Code backend → mode du front (les anciens codes français restent reconnus). */
 export function modePaiementDe(methode: string | null | undefined): ModePaiement | undefined {
-  if (!methode) return undefined;
-  if (["card", "carte_bleue"].includes(methode)) return "carte";
-  if (["cash", "espece"].includes(methode)) return "especes";
-  return undefined;
+  return paiementFront(methode) ?? undefined;
 }
 
 /* ------------------------------------------------------------ Public */
@@ -40,6 +38,7 @@ export interface CommandePubliqueCreee {
   total: string;
   currency: string;
   payment_method_expected: string;
+  withdrawal_delay_minutes?: number;
   tracking_token: string;
 }
 
@@ -76,6 +75,12 @@ export interface SuiviApi {
   status: StatutBackend;
   payment_method_expected: string;
   created_at: string;
+  /** Délai figé sur la commande au moment de sa création. */
+  withdrawal_delay_minutes?: number;
+  /** Fin du délai de désistement (ISO). */
+  withdrawal_deadline?: string;
+  /** Vrai tant que le client peut encore annuler. */
+  can_cancel?: boolean;
   total: string;
   currency: string;
   items: { name: string; quantity: number }[];
@@ -295,4 +300,37 @@ export function trouverEmplacement(
   return emplacements.find(
     (e) => e.is_active && e.type === type && (e.reference.toUpperCase() === s || referenceAffichee(e.type, e.reference).toUpperCase() === s),
   );
+}
+
+/* ------------------------------------------------------------ Clôture de caisse */
+
+export interface ClotureCaisseApi {
+  id: number;
+  closed_for: string;
+  closed_by_email: string;
+  expected_totals: RapportPaiementsApi["totals"];
+  expected_cash: Record<string, string>;
+  counted_cash: Record<string, string>;
+  closed_at: string;
+  notes: string;
+}
+
+/** Clôtures enregistrées pour une journée (gestionnaires). */
+export function listerClotures(date: string): Promise<ClotureCaisseApi[]> {
+  return api<ClotureCaisseApi[]>(`/cash-register/closures/?date=${date}`);
+}
+
+/**
+ * Clôture de la journée : le serveur fige les totaux attendus et enregistre
+ * les espèces comptées (une clôture par responsable et par jour, sinon 409).
+ */
+export function cloturerCaisse(donnees: { date: string; especesComptees: number; devise?: string; notes?: string }): Promise<ClotureCaisseApi> {
+  return api<ClotureCaisseApi>("/cash-register/closures/", {
+    method: "POST",
+    body: {
+      closed_for: donnees.date,
+      counted_cash: { [donnees.devise ?? "XOF"]: donnees.especesComptees.toFixed(2) },
+      notes: (donnees.notes ?? "").slice(0, 500),
+    },
+  });
 }

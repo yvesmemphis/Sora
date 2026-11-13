@@ -7,7 +7,7 @@ import { Modale } from "@/components/ui/modale";
 import { Avatar, Bouton, classeChamp, cx } from "@/components/ui/primitives";
 import { messageErreur, toutesLesPages } from "@/lib/api/client";
 import { inviterEmploye, modifierEmploye, renvoyerInvitation, type Employe } from "@/lib/api/personnel";
-import { ROLE_BACKEND, ROLES, type Role } from "@/lib/demo/admin";
+import { ROLE_BACKEND, ROLES, type Role } from "@/lib/roles";
 import { initiales } from "@/lib/format";
 import { LIBELLE_ROLE } from "@/lib/staff/session";
 import type { Utilisateur } from "@/lib/types";

@@ -16,6 +16,7 @@ const ENTREES: EntreeNavigation[] = [
   { href: "/gestion/commandes", libelle: "Commandes", icone: "list" },
   { href: "/gestion/menu", libelle: "Menu et recettes", icone: "book" },
   { href: "/gestion/stocks", libelle: "Stocks", icone: "box" },
+  { href: "/gestion/referentiel", libelle: "Référentiel", icone: "edit" },
   { href: "/gestion/production", libelle: "Production", icone: "flame" },
   { href: "/gestion/previsions", libelle: "Prévisions IA", icone: "spark" },
   { href: "/gestion/caisse", libelle: "Clôture de caisse", icone: "wallet" },

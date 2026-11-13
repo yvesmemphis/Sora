@@ -72,11 +72,14 @@ const CLE_QR = "sora.emplacement";
 export function memoriserEmplacementQr(recherche: URLSearchParams) {
   const table = recherche.get("table");
   const chambre = recherche.get("chambre");
+  // QR généré par le backend (`/public/menu/qr/`) : `?mode=TAKEAWAY` pour le comptoir.
   const valeur: EmplacementQr | null = table
     ? { mode: "table", reference: table }
     : chambre
       ? { mode: "chambre", reference: chambre }
-      : null;
+      : recherche.get("mode") === "TAKEAWAY"
+        ? { mode: "emporter", reference: "" }
+        : null;
   if (!valeur) return;
   try {
     window.localStorage.setItem(CLE_QR, JSON.stringify(valeur));

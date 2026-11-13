@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { EntetePage, LigneTableau, Tableau } from "@/components/espace/barre-laterale";
 import { Icon } from "@/components/ui/icon";
 import { Avatar, Bouton, Puce, cx } from "@/components/ui/primitives";
-import { LIBELLES_ACTION, listerJournal } from "@/lib/api/admin";
-import { messageErreur } from "@/lib/api/client";
+import { LIBELLES_ACTION, exporterJournal, listerJournal } from "@/lib/api/admin";
+import { messageErreur, telechargerBlob } from "@/lib/api/client";
 import { heureDe } from "@/lib/api/conversions";
 import { dateIso } from "@/lib/api/gestion";
-import { type ModuleJournal } from "@/lib/demo/admin";
+import { type ModuleJournal } from "@/lib/roles";
 import { initiales } from "@/lib/format";
 
 interface LigneJournal {
@@ -24,7 +24,7 @@ interface LigneJournal {
 function moduleDe(action: string): ModuleJournal {
   if (action.startsWith("order")) return "Commandes";
   if (action.startsWith("payment")) return "Paiements";
-  if (action.startsWith("price")) return "Menu";
+  if (action.startsWith("price") || action.startsWith("analytics")) return "Menu";
   if (/^(stock|inventory|production)/.test(action)) return "Stocks";
   return "Comptes";
 }
@@ -88,19 +88,23 @@ export function Journal() {
     );
   }, [filtre, recherche, lignes]);
 
-  function exporter() {
-    const tableau = [
-      ["Date", "Heure", "Acteur", "Module", "Action", "Objet"],
-      ...visibles.map((l) => [l.date, l.heure, l.acteur, l.module, l.action, l.objet]),
-    ];
-    const csv = tableau.map((l) => l.map((c) => `"${c.replace(/"/g, '""')}"`).join(";")).join("\n");
-    const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "journal-activite.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  /** Module backend (`/audit/export/?module=`) quand le filtre en a un seul. */
+  const MODULE_SERVEUR: Partial<Record<ModuleJournal, string>> = { Commandes: "orders", Paiements: "payments", Menu: "menu" };
+
+  async function exporter() {
+    try {
+      const debut = new Date(new Date().getTime() - (periode - 1) * 86_400_000);
+      const blob = await exporterJournal({
+        date_from: dateIso(debut),
+        date_to: dateIso(new Date()),
+        module: filtre === "Tout" ? undefined : MODULE_SERVEUR[filtre],
+      });
+      telechargerBlob(blob, `journal-${dateIso(new Date())}.csv`);
+    } catch (e) {
+      setEtat(messageErreur(e));
+    }
   }
+
 
   return (
     <>
@@ -108,7 +112,7 @@ export function Journal() {
         titre="Journal d'activité"
         sousTitre="Chaque transition et chaque modification est horodatée avec son acteur."
         actions={
-          <Bouton variante="contour" icone="download" onClick={exporter}>
+          <Bouton variante="contour" icone="download" onClick={() => void exporter()}>
             Exporter CSV
           </Bouton>
         }

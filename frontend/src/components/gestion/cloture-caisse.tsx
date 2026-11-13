@@ -6,13 +6,16 @@ import { Icon, type NomIcone } from "@/components/ui/icon";
 import { Badge, Bouton, Carte, cx } from "@/components/ui/primitives";
 import { messageErreur } from "@/lib/api/client";
 import {
+  cloturerCaisse,
   commandeDepuisApi,
   enregistrerPaiement,
+  listerClotures,
   listerCommandes,
   modePaiementDe,
   rapportPaiements,
+  type ClotureCaisseApi,
 } from "@/lib/api/commandes";
-import { montant } from "@/lib/api/conversions";
+import { heureDe, montant } from "@/lib/api/conversions";
 import { dateIso } from "@/lib/api/gestion";
 import { formatEcart, formatFCFA, formatNombre, lireMontant } from "@/lib/format";
 import { MODES_SERVICE } from "@/lib/statuts";
@@ -93,16 +96,24 @@ export function ClotureCaisse() {
   const [carte, setCarte] = useState("");
   const [CAISSE, setCaisse] = useState<Totaux>({ especes: { total: 0, commandes: 0 }, carte: { total: 0, commandes: 0 }, commandesPayees: 0 });
   const [nonPayees, setNonPayees] = useState<{ id: number; numero: string; detail: string; total: number }[]>([]);
-  const [cloturee, setCloturee] = useState(false);
+  const [cloture, setCloture] = useState<ClotureCaisseApi | null>(null);
+  const [envoi, setEnvoi] = useState(false);
   const [etat, setEtat] = useState<string | null>("Chargement…");
+  const cloturee = cloture !== null;
 
   /**
-   * Totaux par mode : `GET /payments/?date=` ; commandes servies non soldées : `GET /orders/?date=`.
+   * Totaux par mode : `GET /payments/?date=` ; commandes servies non soldées : `GET /orders/?date=` ;
+   * clôture déjà enregistrée : `GET /cash-register/closures/?date=`.
    */
   const charger = useCallback(async () => {
     try {
       const jour = dateIso(new Date());
-      const [rapport, liste] = await Promise.all([rapportPaiements(jour), listerCommandes({ date: jour })]);
+      const [rapport, liste, clotures] = await Promise.all([
+        rapportPaiements(jour),
+        listerCommandes({ date: jour }),
+        listerClotures(jour),
+      ]);
+      setCloture(clotures[0] ?? null);
       const t: Totaux = { especes: { total: 0, commandes: 0 }, carte: { total: 0, commandes: 0 }, commandesPayees: 0 };
       for (const ligne of rapport.totals) {
         const bloc = modePaiementDe(ligne.payment_method) === "carte" ? t.carte : t.especes;
@@ -142,6 +153,24 @@ export function ClotureCaisse() {
       await charger();
     } catch (e) {
       setEtat(messageErreur(e));
+    }
+  }
+
+  async function cloturer() {
+    if (envoi || cloturee) return;
+    setEnvoi(true);
+    try {
+      const enregistree = await cloturerCaisse({
+        date: dateIso(new Date()),
+        especesComptees: lireMontant(especes),
+        notes: `Terminal carte : ${lireMontant(carte)} FCFA (attendu ${CAISSE.carte.total} FCFA).`,
+      });
+      setCloture(enregistree);
+      setEtat(null);
+    } catch (e) {
+      setEtat(messageErreur(e));
+    } finally {
+      setEnvoi(false);
     }
   }
 
@@ -251,13 +280,17 @@ export function ClotureCaisse() {
             hauteur="lg"
             icone="lock"
             className="mt-auto h-[52px]"
-            disabled={cloturee}
-            onClick={() => setCloturee(true)}
+            disabled={cloturee || envoi || etat === "Chargement…"}
+            onClick={() => void cloturer()}
           >
-            {cloturee ? "Journée clôturée" : "Clôturer la journée"}
+            {cloturee ? "Journée clôturée" : envoi ? "Enregistrement…" : "Clôturer la journée"}
           </Bouton>
           <span className="text-xs text-[#D9E0DB]">
-            La clôture n&apos;est pas encore enregistrée côté serveur (aucune API de clôture de caisse).
+            {cloture
+              ? `Clôture enregistrée par ${cloture.closed_by_email} à ${heureDe(cloture.closed_at)} · espèces comptées ${formatNombre(
+                  montant(Object.values(cloture.counted_cash)[0]),
+                )}.`
+              : "Les totaux attendus sont figés par le serveur au moment de la clôture."}
           </span>
         </div>
       </div>

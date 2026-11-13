@@ -3,7 +3,7 @@
  * Voir `backend/common/constants.py`.
  */
 import { formatHeure } from "../format";
-import type { ModeService, StatutCommande } from "../types";
+import type { ModePaiement, ModeService, StatutCommande } from "../types";
 
 export type StatutBackend =
   | "RECEIVED"
@@ -84,7 +84,7 @@ export function heureDe(iso: string | null | undefined): string {
 }
 
 /**
- * Référence d'emplacement affichée : les tables du jeu de démo sont « T6 »,
+ * Référence d'emplacement affichée : les tables sont enregistrées « T6 »,
  * on affiche « 6 ». Les chambres restent telles quelles (« 204 »).
  */
 export function referenceAffichee(type: TypeEmplacement, reference: string): string {
@@ -107,3 +107,27 @@ export function referenceSaisie(type: TypeEmplacement, saisie: string, connues?:
 export function numeroCourt(numero: string): string {
   return numero.includes("-") ? numero.slice(numero.lastIndexOf("-") + 1) : numero;
 }
+
+/* ------------------------------------------------------------ Paiement */
+
+/** Codes canoniques de `PAYMENT_METHOD_CHOICES` (backend `common/constants.py`) gérés par le front. */
+export const METHODE_PAIEMENT: Record<ModePaiement, string> = { especes: "cash", carte: "card" };
+
+/** Code backend → mode du front (les anciens codes français restent reconnus). */
+export function paiementFront(methode: string | null | undefined): ModePaiement | null {
+  if (!methode) return null;
+  if (["card", "carte_bleue"].includes(methode)) return "carte";
+  if (["cash", "espece"].includes(methode)) return "especes";
+  return null;
+}
+
+/** Libellé de tous les codes backend (y compris virement et autre). */
+export const LIBELLE_METHODE: Record<string, string> = {
+  cash: "Espèces",
+  card: "Carte",
+  bank_transfer: "Virement",
+  other: "Autre",
+  espece: "Espèces",
+  carte_bleue: "Carte",
+  virement: "Virement",
+};

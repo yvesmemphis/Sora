@@ -9,7 +9,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ACCUEIL_PAR_ROLE, deconnexion, moi, type Moi } from "../api/auth";
-import { ApiError, estConnecte } from "../api/client";
+import { ApiError } from "../api/client";
 import { initiales } from "../format";
 import type { RoleBackend } from "../types";
 
@@ -44,10 +44,6 @@ export function SessionProvider({ roles, children, sombre = false }: { roles: Ro
 
   useEffect(() => {
     const versConnexion = () => router.replace(`/connexion?suite=${encodeURIComponent(chemin)}`);
-    if (!estConnecte()) {
-      versConnexion();
-      return;
-    }
     let actif = true;
     moi()
       .then((u) => actif && setUtilisateur(u))

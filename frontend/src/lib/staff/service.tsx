@@ -226,7 +226,7 @@ export function ServiceProvider({ children }: { children: ReactNode }) {
 
   const signalerIndisponibilite = useCallback<ServiceContexte["signalerIndisponibilite"]>(
     async (platId, d) => {
-      const ok = (await executer(() => changerDisponibilite(platId, d === "disponible"))) !== null;
+      const ok = (await executer(() => changerDisponibilite(platId, d))) !== null;
       if (ok) {
         setCarte((prev) => ({
           ...prev,

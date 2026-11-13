@@ -2,11 +2,20 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { EntetePage, LigneTableau, Tableau } from "@/components/espace/barre-laterale";
-import { Bouton, Carte, Encadre, cx } from "@/components/ui/primitives";
+import { Bouton, Carte, Champ, Encadre, classeChamp, cx } from "@/components/ui/primitives";
 import { messageErreur } from "@/lib/api/client";
 import { montant } from "@/lib/api/conversions";
-import { dateIso, declarerInvendu, listerInvendus, listerProductions, type InvenduApi, type LotProductionApi } from "@/lib/api/gestion";
-import { MOTIFS_INVENDU } from "@/lib/demo/gestion";
+import {
+  creerLotProduction,
+  dateIso,
+  declarerInvendu,
+  listerInvendus,
+  listerProductions,
+  type InvenduApi,
+  type LotProductionApi,
+} from "@/lib/api/gestion";
+import { listerPlats } from "@/lib/api/menu";
+import { MOTIFS_INVENDU } from "@/lib/roles";
 
 const COLONNES = "1.7fr .7fr .7fr .8fr .9fr .7fr 1.6fr";
 
@@ -30,6 +39,37 @@ export function Production() {
   const [erreur, setErreur] = useState<string | null>(null);
   const [envoi, setEnvoi] = useState(false);
   const [enregistre, setEnregistre] = useState(false);
+  const [nomsPlats, setNomsPlats] = useState<string[]>([]);
+  const [nouveau, setNouveau] = useState({ produit: "", quantite: "", cout: "", notes: "" });
+
+  useEffect(() => {
+    listerPlats()
+      .then((p) => setNomsPlats([...new Set(p.map((d) => d.name))].sort((a, b) => a.localeCompare(b, "fr"))))
+      .catch(() => undefined);
+  }, []);
+
+  async function ajouterLot() {
+    const quantite = Number(nouveau.quantite.replace(",", "."));
+    const cout = Number((nouveau.cout || "0").replace(",", "."));
+    if (!nouveau.produit.trim() || !(quantite > 0) || !(cout >= 0)) {
+      setErreur("Indiquez le produit, une quantité positive et un coût unitaire.");
+      return;
+    }
+    setErreur(null);
+    try {
+      await creerLotProduction({
+        product_name: nouveau.produit.trim().slice(0, 120),
+        production_date: jour,
+        quantity_produced: quantite.toFixed(2),
+        unit_cost: cout.toFixed(2),
+        notes: nouveau.notes.trim(),
+      });
+      setNouveau({ produit: "", quantite: "", cout: "", notes: "" });
+      await charger(jour);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    }
+  }
 
   const charger = useCallback(async (date: string) => {
     setEtat("Chargement…");
@@ -57,7 +97,6 @@ export function Production() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- chargement depuis l'API
     void charger(jour);
   }, [charger, jour]);
 
@@ -127,6 +166,44 @@ export function Production() {
           </Carte>
         ))}
       </div>
+      <Carte className="flex flex-col gap-3 p-5">
+        <h2 className="m-0 text-[15px] font-bold">Nouveau lot de production · {new Date(`${jour}T12:00:00`).toLocaleDateString("fr-FR")}</h2>
+        <form
+          className="flex flex-wrap items-end gap-2.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void ajouterLot();
+          }}
+        >
+          <Champ libelle="Produit" className="min-w-[200px] flex-1">
+            <input
+              list="plats-production"
+              value={nouveau.produit}
+              maxLength={120}
+              onChange={(e) => setNouveau((v) => ({ ...v, produit: e.target.value }))}
+              placeholder="Nom du plat préparé"
+              className={cx(classeChamp, "h-10 text-sm")}
+            />
+            <datalist id="plats-production">
+              {nomsPlats.map((nom) => (
+                <option key={nom} value={nom} />
+              ))}
+            </datalist>
+          </Champ>
+          <Champ libelle="Portions" className="w-28">
+            <input inputMode="decimal" value={nouveau.quantite} onChange={(e) => setNouveau((v) => ({ ...v, quantite: e.target.value }))} className={cx(classeChamp, "h-10 text-sm")} />
+          </Champ>
+          <Champ libelle="Coût / portion (FCFA)" className="w-40">
+            <input inputMode="decimal" value={nouveau.cout} onChange={(e) => setNouveau((v) => ({ ...v, cout: e.target.value }))} className={cx(classeChamp, "h-10 text-sm")} />
+          </Champ>
+          <Champ libelle="Notes" className="min-w-[160px] flex-1">
+            <input value={nouveau.notes} onChange={(e) => setNouveau((v) => ({ ...v, notes: e.target.value }))} className={cx(classeChamp, "h-10 text-sm")} />
+          </Champ>
+          <Bouton type="submit" variante="contour" hauteur="sm" icone="plus" disabled={!nouveau.produit.trim() || !nouveau.quantite}>
+            Ajouter le lot
+          </Bouton>
+        </form>
+      </Carte>
       {erreur ? (
         <div role="alert" className="rounded-xl bg-danger-fond px-4 py-3 text-sm font-bold text-danger">
           {erreur}

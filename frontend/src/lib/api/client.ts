@@ -1,22 +1,21 @@
 /**
  * Client HTTP de l'API Django (`/api/v1/`).
  *
- * - Authentification JWT (SimpleJWT) : accès 10 min, rafraîchissement 7 jours avec rotation.
+ * - Authentification JWT (SimpleJWT) : accès 10 min gardé côté navigateur ;
+ *   le jeton de rafraîchissement (7 jours, rotation) vit uniquement dans le
+ *   cookie HttpOnly `sora_refresh` posé par l'API.
+ * - `/auth/refresh/` et `/auth/logout/` exigent l'en-tête `X-CSRFToken`, lu dans
+ *   le cookie `csrftoken` émis à la connexion. Le front et l'API doivent donc
+ *   partager le même hôte (ex. `localhost:3000` et `localhost:8000`).
  * - Rafraîchit automatiquement le jeton d'accès une fois en cas de 401.
  * - Normalise les erreurs au format du backend : { code, message, details }.
- *
- * Stockage des jetons : `localStorage` pour le MVP. À durcir avant la production
- * (cookie httpOnly posé par un Route Handler Next.js servant d'intermédiaire).
  */
 
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1").replace(/\/$/, "");
 
-const CLE_JETONS = "sora.jetons";
-
-export interface Jetons {
-  access: string;
-  refresh: string;
-}
+const CLE_ACCES = "sora.acces";
+/** Ancienne clé (accès + rafraîchissement en clair), nettoyée au démarrage. */
+const CLE_JETONS_OBSOLETE = "sora.jetons";
 
 export class ApiError extends Error {
   constructor(
@@ -32,23 +31,30 @@ export class ApiError extends Error {
 
 /* ------------------------------------------------------------- Jetons */
 
-export function lireJetons(): Jetons | null {
+export function lireAcces(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const brut = window.localStorage.getItem(CLE_JETONS);
-    return brut ? (JSON.parse(brut) as Jetons) : null;
+    window.localStorage.removeItem(CLE_JETONS_OBSOLETE);
+    return window.localStorage.getItem(CLE_ACCES);
   } catch {
     return null;
   }
 }
 
-export function enregistrerJetons(jetons: Jetons | null) {
+export function enregistrerAcces(acces: string | null) {
   try {
-    if (jetons) window.localStorage.setItem(CLE_JETONS, JSON.stringify(jetons));
-    else window.localStorage.removeItem(CLE_JETONS);
+    if (acces) window.localStorage.setItem(CLE_ACCES, acces);
+    else window.localStorage.removeItem(CLE_ACCES);
   } catch {
     /* stockage indisponible */
   }
+}
+
+/** Jeton CSRF Django (cookie `csrftoken`, lisible par le front). */
+export function jetonCsrf(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  const ligne = document.cookie.split("; ").find((c) => c.startsWith("csrftoken="));
+  return ligne ? decodeURIComponent(ligne.slice("csrftoken=".length)) : undefined;
 }
 
 /* ------------------------------------------------------------ Requêtes */
@@ -61,29 +67,31 @@ interface Options {
   signal?: AbortSignal;
   /** En-têtes supplémentaires (ex. `Idempotency-Key`). */
   headers?: Record<string, string>;
+  /** Envoie les cookies (rafraîchissement, CSRF) : routes `/auth/*`. */
+  cookies?: boolean;
+  /** Corps multipart (envoi de fichier) ; remplace `body`. */
+  formulaire?: FormData;
 }
 
 let rafraichissementEnCours: Promise<string | null> | null = null;
 
 async function rafraichir(): Promise<string | null> {
-  const jetons = lireJetons();
-  if (!jetons?.refresh) return null;
   // Une seule requête de rafraîchissement à la fois, partagée par les appels concurrents.
   rafraichissementEnCours ??= (async () => {
     try {
+      const csrf = jetonCsrf();
       const rep = await fetch(`${API_URL}/auth/refresh/`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh: jetons.refresh }),
+        credentials: "include",
+        headers: { Accept: "application/json", ...(csrf ? { "X-CSRFToken": csrf } : {}) },
       });
       if (!rep.ok) {
-        enregistrerJetons(null);
+        enregistrerAcces(null);
         return null;
       }
-      const data = (await rep.json()) as Partial<Jetons>;
-      const nouveaux = { access: data.access ?? "", refresh: data.refresh ?? jetons.refresh };
-      enregistrerJetons(nouveaux);
-      return nouveaux.access;
+      const data = (await rep.json()) as { access?: string };
+      enregistrerAcces(data.access ?? null);
+      return data.access ?? null;
     } catch {
       return null;
     } finally {
@@ -102,23 +110,33 @@ async function lireErreur(rep: Response): Promise<ApiError> {
   }
 }
 
-export async function api<T = unknown>(chemin: string, { method = "GET", body, auth = true, signal, headers }: Options = {}): Promise<T> {
-  const envoyer = (access?: string) =>
-    fetch(`${API_URL}${chemin.startsWith("/") ? chemin : `/${chemin}`}`, {
+/** Envoie la requête (avec jeton d'accès, rafraîchi une fois sur 401) et renvoie la réponse brute. */
+async function requete(
+  chemin: string,
+  { method = "GET", body, auth = true, signal, headers, cookies = false, formulaire }: Options,
+  accept: string,
+): Promise<Response> {
+  const envoyer = (access?: string | null) => {
+    const csrf = cookies ? jetonCsrf() : undefined;
+    return fetch(`${API_URL}${chemin.startsWith("/") ? chemin : `/${chemin}`}`, {
       method,
       signal,
+      credentials: cookies ? "include" : "same-origin",
       headers: {
-        Accept: "application/json",
+        Accept: accept,
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(access ? { Authorization: `Bearer ${access}` } : {}),
+        ...(csrf ? { "X-CSRFToken": csrf } : {}),
         ...headers,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Multipart : le navigateur pose lui-même le Content-Type et sa frontière.
+      body: formulaire ?? (body !== undefined ? JSON.stringify(body) : undefined),
     });
+  };
 
   let rep: Response;
   try {
-    rep = await envoyer(auth ? lireJetons()?.access : undefined);
+    rep = await envoyer(auth ? lireAcces() : undefined);
     if (auth && rep.status === 401) {
       const access = await rafraichir();
       if (access) rep = await envoyer(access);
@@ -127,15 +145,37 @@ export async function api<T = unknown>(chemin: string, { method = "GET", body, a
     if ((e as Error).name === "AbortError") throw e;
     throw new ApiError(0, "reseau", "Serveur injoignable. Vérifiez votre connexion.");
   }
-
   if (!rep.ok) throw await lireErreur(rep);
+  return rep;
+}
+
+export async function api<T = unknown>(chemin: string, options: Options = {}): Promise<T> {
+  const rep = await requete(chemin, options, "application/json");
   if (rep.status === 204 || rep.status === 202) return undefined as T;
   return (await rep.json()) as T;
 }
 
-/** Vrai si un jeton est présent (sans garantie de validité). */
+/** Fichier binaire authentifié (QR en PNG, export CSV…) avec ses en-têtes. */
+export async function apiFichier(chemin: string, options: Options = {}): Promise<{ blob: Blob; entetes: Headers }> {
+  const rep = await requete(chemin, options, "*/*");
+  return { blob: await rep.blob(), entetes: rep.headers };
+}
+
+/** Propose au navigateur d'enregistrer un fichier reçu de l'API. */
+export function telechargerBlob(blob: Blob, nom: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nom;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Vrai si un jeton d'accès est présent (sans garantie de validité). */
 export function estConnecte(): boolean {
-  return !!lireJetons()?.access;
+  return !!lireAcces();
 }
 
 /** Clé d'idempotence aléatoire (≤ 64 caractères) pour les créations. */

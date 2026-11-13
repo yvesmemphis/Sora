@@ -22,7 +22,7 @@ const ESPACES: {
     fond: "bg-terracotta-fond text-terracotta",
     appareil: "Smartphone, sans compte",
     description:
-      "Consulte la carte via QR code, commande, choisit son emplacement et son paiement, suit sa commande et peut se désister pendant 5 minutes.",
+      "Consulte la carte via QR code, commande, choisit son emplacement et son paiement, suit sa commande et peut se désister pendant le délai prévu.",
     ecrans: ["Carte", "Fiche plat", "Panier", "Suivi"],
   },
   {

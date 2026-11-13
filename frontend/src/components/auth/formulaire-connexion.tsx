@@ -150,7 +150,7 @@ export function FormulaireConnexion() {
         </button>
       ) : (
         <Link href="/" className="self-start text-sm text-texte-3 hover:text-vert">
-          Voir tous les espaces (démonstration)
+          Voir tous les espaces
         </Link>
       )}
     </form>

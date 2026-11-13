@@ -26,6 +26,9 @@ export function Panier() {
   const [erreurEnvoi, setErreurEnvoi] = useState<string | null>(null);
   const [envoi, setEnvoi] = useState(false);
   const { menu } = useMenu();
+  // Modes acceptés par le restaurant (réglage `accepted_payment_methods`).
+  const modesPaiement: ModePaiement[] = menu?.modesPaiement ?? (Object.keys(MODES_PAIEMENT) as ModePaiement[]);
+  const paiementRetenu = modesPaiement.includes(paiement) ? paiement : modesPaiement[0];
 
   // Pré-remplissage depuis le QR code scanné.
   useEffect(() => {
@@ -50,7 +53,7 @@ export function Panier() {
       const commande = await passerCommande({
         mode,
         emplacement: emplacementRequis ? emplacement.trim() : "Au comptoir",
-        paiement,
+        paiement: paiementRetenu,
       });
       router.push(`/suivi/${encodeURIComponent(commande.jeton)}`);
     } catch (e) {
@@ -162,15 +165,15 @@ export function Panier() {
             <fieldset className="flex flex-col gap-2.5">
               <legend className="mb-2.5 text-[15px] font-bold">Paiement au service</legend>
               <div className="grid grid-cols-2 gap-2">
-                {(Object.keys(MODES_PAIEMENT) as ModePaiement[]).map((p) => (
+                {modesPaiement.map((p) => (
                   <button
                     key={p}
                     type="button"
-                    aria-pressed={p === paiement}
+                    aria-pressed={p === paiementRetenu}
                     onClick={() => setPaiement(p)}
                     className={cx(
                       "flex h-[52px] cursor-pointer items-center gap-2.5 rounded-xl px-3.5 text-[15px] font-bold",
-                      classeChoix(p === paiement),
+                      classeChoix(p === paiementRetenu),
                     )}
                   >
                     <Icon name={MODES_PAIEMENT[p].icone} className="size-[22px]" />

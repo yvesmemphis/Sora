@@ -6,10 +6,11 @@ import { Icon } from "@/components/ui/icon";
 import { Badge, Bouton, cx } from "@/components/ui/primitives";
 import { messageErreur } from "@/lib/api/client";
 import { montant } from "@/lib/api/conversions";
-import { listerIngredients, recetteActive, type IngredientApi, type RecetteApi } from "@/lib/api/gestion";
+import { UNITES, listerIngredients, publierRecette, recetteActive, type IngredientApi, type RecetteApi } from "@/lib/api/gestion";
 import {
   changerDisponibilite,
   creerPlat,
+  envoyerPhotoPlat,
   listerCategories,
   listerPlats,
   modifierPlat,
@@ -41,6 +42,9 @@ export function MenuRecettes() {
   const [erreur, setErreur] = useState<string | null>(null);
   const [envoi, setEnvoi] = useState(false);
   const [chargement, setChargement] = useState(true);
+  /** Lignes de la recette en cours d'édition (null : lecture seule). */
+  const [edition, setEdition] = useState<{ ingredient: string; quantite: string }[] | null>(null);
+  const [envoiPhoto, setEnvoiPhoto] = useState(false);
   const CATEGORIES = categoriesApi.map((c) => c.name);
 
   const charger = useCallback(async () => {
@@ -84,12 +88,14 @@ export function MenuRecettes() {
   }, [plats, categorie, recherche]);
 
   function ouvrir(p: Plat) {
+    setEdition(null);
     setRecette(null);
     setSelection(p.id);
     setBrouillon({ ...p });
   }
 
   function nouveau() {
+    setEdition(null);
     setRecette(null);
     setSelection(null);
     const cat = categoriesApi.find((c) => c.name === categorie) ?? categoriesApi.find((c) => c.is_active);
@@ -122,11 +128,10 @@ export function MenuRecettes() {
       let maj = brouillon.id
         ? await modifierPlat(brouillon.id, champs)
         : await creerPlat({ ...champs, category: brouillon.categorieId ?? "" });
-      const disponible = brouillon.disponibilite === "disponible";
-      if (maj.is_available !== disponible) maj = await changerDisponibilite(maj.id, disponible);
+      if (platDepuisApi(maj, categoriesApi).disponibilite !== brouillon.disponibilite) {
+        maj = await changerDisponibilite(maj.id, brouillon.disponibilite);
+      }
       const plat = platDepuisApi(maj, categoriesApi);
-      // L'API ne distingue pas « temporaire » et « épuisé » : on garde le choix affiché.
-      if (!disponible) plat.disponibilite = brouillon.disponibilite;
       setPlats((prev) => (prev.some((p) => p.id === plat.id) ? prev.map((p) => (p.id === plat.id ? plat : p)) : [...prev, plat]));
       setSelection(plat.id);
       setBrouillon({ ...plat });
@@ -136,6 +141,60 @@ export function MenuRecettes() {
       setEnvoi(false);
     }
   }
+
+  /** Met à jour un plat dans la liste et dans le panneau d'édition. */
+  function remplacer(plat: Plat) {
+    setPlats((prev) => (prev.some((p) => p.id === plat.id) ? prev.map((p) => (p.id === plat.id ? plat : p)) : [...prev, plat]));
+    setBrouillon((b) => (b && b.id === plat.id ? { ...b, image: plat.image } : b));
+  }
+
+  async function changerPhoto(fichier: File | undefined) {
+    if (!fichier || !brouillon?.id || envoiPhoto) return;
+    setEnvoiPhoto(true);
+    setErreur(null);
+    try {
+      remplacer(platDepuisApi(await envoyerPhotoPlat(brouillon.id, fichier), categoriesApi));
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setEnvoiPhoto(false);
+    }
+  }
+
+  function editerRecette() {
+    const actuelle = brouillon?.id && recette?.menu_item_id === brouillon.id ? recette.items : [];
+    setEdition(
+      actuelle.length
+        ? actuelle.map((r) => ({ ingredient: String(r.ingredient), quantite: String(montant(r.quantity_required)) }))
+        : [{ ingredient: "", quantite: "" }],
+    );
+  }
+
+  async function publier() {
+    if (!brouillon?.id || !edition || envoi) return;
+    const lignes = edition
+      .map((l) => ({ ingredient: l.ingredient, quantite: String(Number(l.quantite.replace(",", "."))) }))
+      .filter((l) => l.ingredient && Number(l.quantite) > 0);
+    if (!lignes.length || new Set(lignes.map((l) => l.ingredient)).size !== lignes.length) {
+      setErreur("Chaque ingrédient doit apparaître une seule fois, avec une quantité positive.");
+      return;
+    }
+    setEnvoi(true);
+    setErreur(null);
+    try {
+      setRecette(await publierRecette({ platId: brouillon.id, nom: brouillon.nom, lignes }));
+      setEdition(null);
+    } catch (e) {
+      setErreur(messageErreur(e));
+    } finally {
+      setEnvoi(false);
+    }
+  }
+
+  const uniteDe = (id: string) => {
+    const code = ingredients.find((i) => String(i.id) === id)?.unit_of_measure;
+    return UNITES.find((u) => u.code === code)?.libelle ?? code ?? "";
+  };
 
   const coutUnitaire = (id: number | string) => montant(ingredients.find((i) => String(i.id) === String(id))?.cost_per_unit);
   const lignesRecette = (brouillon?.id && recette?.menu_item_id === brouillon.id ? recette.items : []).map((r) => ({
@@ -193,7 +252,12 @@ export function MenuRecettes() {
           {visibles.map((p) => (
             <LigneTableau key={p.id} colonnes={COLONNES} onClick={() => ouvrir(p)} selectionnee={p.id === selection}>
               <div className="flex items-center gap-3">
-                <span className="photo-placeholder h-[33px] w-11 shrink-0 rounded-lg" />
+                {p.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- média servi par l'API
+                  <img src={p.image} alt="" className="h-[33px] w-11 shrink-0 rounded-lg object-cover" />
+                ) : (
+                  <span className="photo-placeholder h-[33px] w-11 shrink-0 rounded-lg" />
+                )}
                 <div className="flex flex-col">
                   <span className="font-bold">{p.nom}</span>
                   <span className="text-xs text-texte-3">{p.categorie}</span>
@@ -233,9 +297,32 @@ export function MenuRecettes() {
             </button>
           </div>
           <div className="grid grid-cols-[120px_1fr] items-center gap-4">
-            <div className="photo-placeholder flex h-[90px] items-end justify-center rounded-xl pb-1.5 font-mono text-[10px] text-[#7A7166]">
-              photo 4:3
-            </div>
+            <label
+              className={cx(
+                "relative flex h-[90px] flex-col items-center justify-end overflow-hidden rounded-xl pb-1.5 font-mono text-[10px] text-[#7A7166]",
+                brouillon.image ? "bg-sable" : "photo-placeholder",
+                brouillon.id ? "cursor-pointer" : "cursor-not-allowed",
+              )}
+              title={brouillon.id ? "Changer la photo (JPEG, PNG ou WebP)" : "Enregistrez le plat avant d'ajouter une photo"}
+            >
+              {brouillon.image ? (
+                // eslint-disable-next-line @next/next/no-img-element -- média servi par l'API (stockage Supabase ou local)
+                <img src={brouillon.image} alt={`Photo · ${brouillon.nom}`} className="absolute inset-0 size-full object-cover" />
+              ) : null}
+              <span className="relative rounded bg-papier/85 px-1.5 py-0.5">
+                {envoiPhoto ? "envoi…" : brouillon.image ? "changer" : "ajouter photo"}
+              </span>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                disabled={!brouillon.id || envoiPhoto}
+                className="sr-only"
+                onChange={(e) => {
+                  void changerPhoto(e.target.files?.[0]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
             <div className="flex flex-col gap-1">
               <input
                 value={brouillon.nom}
@@ -312,15 +399,74 @@ export function MenuRecettes() {
             </div>
           </div>
           <div className="flex flex-col gap-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-[15px] font-bold">
                 Recette{lignesRecette.length && recette ? ` · version ${recette.version_number}` : ""}
               </span>
-              {lignesRecette.length && recette?.valid_from ? (
-                <span className="text-xs text-texte-3">depuis le {new Date(recette.valid_from).toLocaleDateString("fr-FR")}</span>
+              {edition ? null : brouillon.id ? (
+                <Bouton variante="fantome" hauteur="sm" icone="edit" onClick={editerRecette}>
+                  {lignesRecette.length ? "Nouvelle version" : "Saisir la recette"}
+                </Bouton>
               ) : null}
             </div>
-            {lignesRecette.length ? (
+            {lignesRecette.length && recette?.valid_from && !edition ? (
+              <span className="text-xs text-texte-3">En vigueur depuis le {new Date(recette.valid_from).toLocaleDateString("fr-FR")}</span>
+            ) : null}
+            {edition ? (
+              <div className="flex flex-col gap-2 rounded-xl border border-ligne p-3">
+                {edition.map((l, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_90px_36px] items-center gap-2">
+                    <select
+                      value={l.ingredient}
+                      aria-label={`Ingrédient ${i + 1}`}
+                      onChange={(e) => setEdition(edition.map((x, j) => (j === i ? { ...x, ingredient: e.target.value } : x)))}
+                      className="h-10 cursor-pointer rounded-lg border border-bordure-2 bg-papier px-2 text-[13px] outline-none focus:border-vert"
+                    >
+                      <option value="">Ingrédient…</option>
+                      {ingredients
+                        .filter((x) => x.is_active)
+                        .map((x) => (
+                          <option key={String(x.id)} value={String(x.id)}>
+                            {x.name}
+                          </option>
+                        ))}
+                    </select>
+                    <label className="flex h-10 items-center gap-1 rounded-lg border border-bordure-2 px-2 text-[13px] focus-within:border-vert">
+                      <input
+                        inputMode="decimal"
+                        value={l.quantite}
+                        aria-label={`Quantité ${i + 1}`}
+                        onChange={(e) => setEdition(edition.map((x, j) => (j === i ? { ...x, quantite: e.target.value } : x)))}
+                        className="tabular w-full min-w-0 bg-transparent outline-none"
+                      />
+                      <span className="text-texte-3">{uniteDe(l.ingredient)}</span>
+                    </label>
+                    <button
+                      type="button"
+                      aria-label={`Retirer la ligne ${i + 1}`}
+                      onClick={() => setEdition(edition.filter((_, j) => j !== i))}
+                      className="flex size-9 cursor-pointer items-center justify-center rounded-lg text-danger hover:bg-danger-fond"
+                    >
+                      <Icon name="trash" className="size-4" />
+                    </button>
+                  </div>
+                ))}
+                {ingredients.length === 0 ? (
+                  <span className="text-xs text-texte-3">Aucun ingrédient : créez-les d&apos;abord dans Référentiel.</span>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Bouton variante="fantome" hauteur="sm" icone="plus" onClick={() => setEdition([...edition, { ingredient: "", quantite: "" }])}>
+                    Ligne
+                  </Bouton>
+                  <Bouton variante="fantome" hauteur="sm" onClick={() => setEdition(null)}>
+                    Annuler
+                  </Bouton>
+                  <Bouton hauteur="sm" disabled={envoi} onClick={() => void publier()}>
+                    {envoi ? "Publication…" : "Publier la version"}
+                  </Bouton>
+                </div>
+              </div>
+            ) : lignesRecette.length ? (
               <div className="overflow-hidden rounded-xl border border-ligne">
                 {lignesRecette.map((r) => (
                   <div key={r.ingredient} className="tabular grid grid-cols-[1fr_90px_90px] border-b border-ligne-3 px-3.5 py-[9px] text-[13px]">
@@ -338,7 +484,9 @@ export function MenuRecettes() {
               <div className="rounded-xl border border-dashed border-bordure p-4 text-center text-[13px] text-texte-3">
                 Aucune recette active pour ce plat.
                 <br />
-                <span className="text-xs">La saisie des recettes (POST /recipe-versions/publish/) reste à câbler.</span>
+                <span className="text-xs">
+                  {brouillon.id ? "Sans recette, la préparation ne décompte pas le stock." : "Enregistrez le plat pour saisir sa recette."}
+                </span>
               </div>
             )}
             <span className="text-xs text-texte-3">
