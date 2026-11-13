@@ -15,6 +15,28 @@ SECRET_KEY = env("DJANGO_SECRET_KEY")
 DEBUG = env.bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = env.list("DJANGO_ALLOWED_HOSTS", default=[])
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
+EMAIL_BACKEND = env(
+    "EMAIL_BACKEND",
+    default="django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = env("EMAIL_HOST", default="localhost")
+EMAIL_PORT = env.int("EMAIL_PORT", default=25)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=10)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@example.com")
+JWT_REFRESH_COOKIE_NAME = env("JWT_REFRESH_COOKIE_NAME", default="sora_refresh")
+JWT_REFRESH_COOKIE_PATH = "/api/v1/auth/"
+JWT_REFRESH_COOKIE_SECURE = env.bool(
+    "JWT_REFRESH_COOKIE_SECURE", default=not DEBUG
+)
+JWT_REFRESH_COOKIE_SAMESITE = env("JWT_REFRESH_COOKIE_SAMESITE", default="Lax")
+if JWT_REFRESH_COOKIE_SAMESITE not in {"Lax", "Strict", "None"}:
+    raise ImproperlyConfigured("JWT_REFRESH_COOKIE_SAMESITE must be Lax, Strict, or None.")
+if JWT_REFRESH_COOKIE_SAMESITE == "None" and not JWT_REFRESH_COOKIE_SECURE:
+    raise ImproperlyConfigured("SameSite=None refresh cookies require Secure.")
 ORDER_MENU_PRICING_SERVICE = env("ORDER_MENU_PRICING_SERVICE", default="")
 ORDER_TAX_RATE = env("ORDER_TAX_RATE", default="0")
 
@@ -190,6 +212,7 @@ REST_FRAMEWORK = {
         "public_track": "30/min",
     },
 }
+CORS_ALLOW_CREDENTIALS = True
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=10),

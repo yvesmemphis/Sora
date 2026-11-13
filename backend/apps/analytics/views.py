@@ -23,6 +23,18 @@ class OverviewResponseSerializer(serializers.Serializer):
     payments = serializers.DictField(child=serializers.IntegerField(), required=False)
     revenue = serializers.DictField(child=serializers.CharField(), required=False)
     daily_order_count = serializers.IntegerField(required=False)
+    popular_dishes = serializers.ListField(
+        child=serializers.DictField(), required=False
+    )
+    orders_by_hour = serializers.ListField(
+        child=serializers.DictField(), required=False
+    )
+    average_baskets = serializers.ListField(
+        child=serializers.DictField(), required=False
+    )
+    margins_and_costs = serializers.ListField(
+        child=serializers.DictField(), required=False
+    )
 
 
 def _date_parameter(value, fallback):
@@ -58,6 +70,8 @@ class OverviewView(APIView):
         role = getattr(request.user, "role", None)
         if role == Role.KITCHEN:
             data.pop("revenue")
+            data.pop("average_baskets")
+            data.pop("margins_and_costs")
         return Response(data)
 
 

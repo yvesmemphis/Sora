@@ -25,7 +25,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny, IsAdminUser
 
-from apps.audit.views import AuditViewSet
+from apps.audit.views import AuditExportView, AuditViewSet
 from apps.core.views import SettingsViewSet
 
 schema_permission = AllowAny if settings.DEBUG else IsAdminUser
@@ -47,6 +47,11 @@ urlpatterns = [
         "api/v1/settings/",
         SettingsViewSet.as_view({"get": "retrieve", "patch": "partial_update"}),
         name="settings",
+    ),
+    path(
+        "api/v1/audit/export/",
+        AuditExportView.as_view(),
+        name="audit-export",
     ),
     path(
         "api/v1/audit/",

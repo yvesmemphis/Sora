@@ -1,6 +1,5 @@
 import hashlib
 import json
-from datetime import timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.conf import settings
@@ -172,6 +171,8 @@ def _resolve_items(items):
 
 
 def create_order(data, *, user, idempotency_key=None):
+    from apps.core.models import RestaurantSettings
+
     if not user or not user.is_authenticated or not user.is_active:
         raise DomainError("authentication_required", "Authentification requise.", 401)
     if user.role not in (MANAGERS | {Role.WAITER}):
@@ -194,6 +195,17 @@ def create_order(data, *, user, idempotency_key=None):
     if data.get("payment_method_expected"):
         fingerprint_data["payment_method_expected"] = data["payment_method_expected"]
     fingerprint = _fingerprint(fingerprint_data)
+    restaurant_settings = RestaurantSettings.load()
+    payment_method_expected = data.get("payment_method_expected", "")
+    if (
+        payment_method_expected
+        and payment_method_expected not in restaurant_settings.accepted_payment_methods
+    ):
+        raise DomainError(
+            "payment_method_unavailable",
+            "Ce mode de paiement n'est pas accepté.",
+            400,
+        )
     mode = data.get("mode", OrderMode.TAKEAWAY)
     location = data.get("location")
     mode = _validate_order_location(mode, location)
@@ -218,6 +230,7 @@ def create_order(data, *, user, idempotency_key=None):
                 mode=mode,
                 location=location,
                 payment_method_expected=data.get("payment_method_expected", ""),
+                currency=restaurant_settings.currency,
                 source="STAFF",
                 table_number=data.get("table_number"),
                 customer_name=data.get("customer_name"),
@@ -297,8 +310,6 @@ def create_public_order(
 
 @transaction.atomic
 def cancel_public_order(*, order_id):
-    from apps.core.models import RestaurantSettings
-
     try:
         order = Order.objects.select_for_update().get(pk=order_id)
     except Order.DoesNotExist:
@@ -310,11 +321,7 @@ def cancel_public_order(*, order_id):
             "Cette commande ne peut plus être annulée par le client.",
             409,
         )
-    settings = RestaurantSettings.load()
-    deadline = order.created_at + timedelta(
-        minutes=settings.withdrawal_delay_minutes
-    )
-    if timezone.now() > deadline:
+    if timezone.now() > order.withdrawal_deadline:
         raise DomainError(
             "withdrawal_window_expired",
             "Le délai d'annulation de la commande est dépassé.",
@@ -327,6 +334,34 @@ def cancel_public_order(*, order_id):
         note="Annulation demandée par le client",
         internal=True,
     )
+
+
+@transaction.atomic
+def confirm_expired_public_orders():
+    from apps.core.models import RestaurantSettings
+
+    restaurant_settings = RestaurantSettings.load()
+    if not restaurant_settings.auto_confirm_orders:
+        return 0
+
+    now = timezone.now()
+    orders = Order.objects.select_for_update().filter(
+        source="PUBLIC",
+        status=OrderStatus.RECEIVED,
+        mode__in=(OrderMode.DINE_IN, OrderMode.TAKEAWAY),
+    )
+    confirmed = 0
+    for order in orders.iterator():
+        if now < order.withdrawal_deadline:
+            continue
+        transition_order(
+            order.pk,
+            OrderStatus.CONFIRMED,
+            note="Confirmation automatique après expiration du délai de désistement",
+            internal=True,
+        )
+        confirmed += 1
+    return confirmed
 
 
 def _public_order_fingerprint(
@@ -362,6 +397,15 @@ def _create_public_order(
     if not restaurant_settings.public_ordering_enabled:
         raise DomainError(
             "ordering_disabled", "Les commandes en ligne sont fermées.", 503
+        )
+    if (
+        payment_method_expected
+        and payment_method_expected not in restaurant_settings.accepted_payment_methods
+    ):
+        raise DomainError(
+            "payment_method_unavailable",
+            "Ce mode de paiement n'est pas accepté.",
+            400,
         )
 
     if not items or len(items) > 30:
@@ -422,8 +466,7 @@ def _create_public_order(
     if len(dishes) != len(dish_ids):
         raise DomainError("dish_unavailable", "Un plat est indisponible.", 409)
 
-    auto_confirm = restaurant_settings.auto_confirm_orders and mode != OrderMode.ROOM
-    initial_status = OrderStatus.CONFIRMED if auto_confirm else OrderStatus.RECEIVED
+    initial_status = OrderStatus.RECEIVED
     order = Order.objects.create(
         number=_next_order_number(),
         idempotency_key=idempotency_key,
@@ -433,6 +476,8 @@ def _create_public_order(
         payment_method_expected=payment_method_expected,
         source="PUBLIC",
         status=initial_status,
+        currency=restaurant_settings.currency,
+        withdrawal_delay_minutes=restaurant_settings.withdrawal_delay_minutes,
         notes=note[:300],
         subtotal=Decimal("0.00"),
         tax=Decimal("0.00"),
@@ -476,8 +521,6 @@ def _create_public_order(
         resource=order,
         metadata={"item_count": len(lines), "total": str(order.total)},
     )
-    if initial_status == OrderStatus.CONFIRMED:
-        _update_kitchen_queue(order, initial_status)
     _schedule_order_event(order, "order.created")
     return order, True
 
@@ -710,3 +753,9 @@ def _schedule_order_event(order, event_type):
         )
 
     transaction.on_commit(publish)
+
+    from apps.notifications.services import send_order_notification
+
+    transaction.on_commit(
+        lambda: send_order_notification(order_id=order_id, event_type=event_type)
+    )

@@ -36,10 +36,22 @@ class DishSerializer(serializers.ModelSerializer):
             "preparation_time",
             "allergens",
             "is_available",
+            "availability_status",
             "is_published",
             "image",
         ]
         read_only_fields = ["id"]
+
+    def validate(self, attrs):
+        if "is_available" in attrs and "availability_status" in attrs:
+            status_is_available = (
+                attrs["availability_status"] == Dish.AvailabilityStatus.AVAILABLE
+            )
+            if attrs["is_available"] != status_is_available:
+                raise serializers.ValidationError(
+                    "is_available et availability_status sont incohérents."
+                )
+        return attrs
 
     def validate_category(self, value):
         if not value.is_active:
@@ -53,6 +65,17 @@ class DishSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         old_price = instance.price
+        if "availability_status" in validated_data:
+            validated_data["is_available"] = (
+                validated_data["availability_status"]
+                == Dish.AvailabilityStatus.AVAILABLE
+            )
+        elif "is_available" in validated_data:
+            validated_data["availability_status"] = (
+                Dish.AvailabilityStatus.AVAILABLE
+                if validated_data["is_available"]
+                else Dish.AvailabilityStatus.TEMPORARILY_UNAVAILABLE
+            )
         dish = super().update(instance, validated_data)
         if dish.price != old_price:
             audit.log(
@@ -65,7 +88,25 @@ class DishSerializer(serializers.ModelSerializer):
 
 
 class AvailabilitySerializer(serializers.Serializer):
-    is_available = serializers.BooleanField()
+    is_available = serializers.BooleanField(required=False)
+    availability_status = serializers.ChoiceField(
+        choices=Dish.AvailabilityStatus.choices, required=False
+    )
+
+    def validate(self, attrs):
+        if "is_available" not in attrs and "availability_status" not in attrs:
+            raise serializers.ValidationError(
+                "Fournissez is_available ou availability_status."
+            )
+        if "is_available" in attrs and "availability_status" in attrs:
+            status_is_available = (
+                attrs["availability_status"] == Dish.AvailabilityStatus.AVAILABLE
+            )
+            if attrs["is_available"] != status_is_available:
+                raise serializers.ValidationError(
+                    "is_available et availability_status sont incohérents."
+                )
+        return attrs
 
 
 class CategoryViewSet(
@@ -95,7 +136,12 @@ class DishViewSet(viewsets.ModelViewSet):
     serializer_class = DishSerializer
     permission_classes = [RolePermission]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
-    filterset_fields = ["category", "is_available", "is_published"]
+    filterset_fields = [
+        "category",
+        "is_available",
+        "availability_status",
+        "is_published",
+    ]
     role_map = {
         "list": ALL_ROLES,
         "retrieve": ALL_ROLES,
@@ -119,8 +165,15 @@ class DishViewSet(viewsets.ModelViewSet):
         dish = self.get_object()
         serializer = AvailabilitySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        dish.is_available = serializer.validated_data["is_available"]
-        dish.save(update_fields=["is_available", "updated_at"])
+        availability_status = serializer.validated_data.get("availability_status")
+        if availability_status is None:
+            availability_status = (
+                Dish.AvailabilityStatus.AVAILABLE
+                if serializer.validated_data["is_available"]
+                else Dish.AvailabilityStatus.TEMPORARILY_UNAVAILABLE
+            )
+        dish.availability_status = availability_status
+        dish.save(update_fields=["availability_status", "updated_at"])
         return Response(
             DishSerializer(dish, context=self.get_serializer_context()).data
         )

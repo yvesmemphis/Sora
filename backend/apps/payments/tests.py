@@ -102,6 +102,48 @@ def test_new_payment_uses_order_currency_and_keeps_legacy_currency():
     assert legacy_payment.currency == "EUR"
 
 
+def test_admin_can_record_and_list_a_cash_register_closure():
+    manager = UserFactory(role=Role.MANAGER)
+    order = make_order(owner=manager, status=OrderStatus.SERVED, total="10.00")
+    register_payment(
+        order=order,
+        amount="10.00",
+        payment_method="cash",
+        user=manager,
+    )
+    client = APIClient()
+    client.force_authenticate(manager)
+
+    response = client.post(
+        "/api/v1/cash-register/closures/",
+        {"counted_cash": {"XOF": "10.00"}, "notes": "Fin de service"},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["expected_cash"] == {"XOF": "10.00"}
+    assert response.data["counted_cash"] == {"XOF": "10.00"}
+    assert client.get(
+        "/api/v1/cash-register/closures/",
+        {"date": timezone.localdate().isoformat()},
+    ).data[0]["id"] == response.data["id"]
+    duplicate = client.post(
+        "/api/v1/cash-register/closures/",
+        {"counted_cash": {"XOF": "10.00"}},
+        format="json",
+    )
+    assert duplicate.status_code == 409
+    future = client.post(
+        "/api/v1/cash-register/closures/",
+        {
+            "closed_for": (timezone.localdate() + timezone.timedelta(days=1)).isoformat(),
+            "counted_cash": {"XOF": "0.00"},
+        },
+        format="json",
+    )
+    assert future.status_code == 400
+
+
 def test_waiter_can_pay_active_public_order():
     waiter = UserFactory(role=Role.WAITER)
     order = make_order(owner=None, status=OrderStatus.SERVED)

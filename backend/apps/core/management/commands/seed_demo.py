@@ -8,8 +8,9 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
+from apps.analytics.models import Forecast
 from apps.analytics.services import forecast_dish
-from apps.core.models import RestaurantSettings
+from apps.core.models import RestaurantSettings, register_demo_record
 from apps.inventory.models import Ingredient, RecipeVersion, Supplier
 from apps.inventory.services import publish_recipe_version, receive_lot
 from apps.locations.models import Location
@@ -42,7 +43,10 @@ class Command(BaseCommand):
         self._inventory(users[Role.MANAGER], dishes)
         self._production(users[Role.MANAGER])
         self._history(users[Role.WAITER], users[Role.MANAGER], dishes[0])
+        existing_forecasts = set(Forecast.objects.values_list("pk", flat=True))
         forecast_dish(timezone.localdate() + timedelta(days=1))
+        for forecast in Forecast.objects.exclude(pk__in=existing_forecasts):
+            register_demo_record(forecast)
         self.stdout.write(self.style.SUCCESS("Données de démonstration prêtes."))
 
     def _users(self, password):
@@ -54,6 +58,8 @@ class Command(BaseCommand):
                 email=email,
                 defaults={"role": role, "first_name": role.title()},
             )
+            if created:
+                register_demo_record(user)
             if created or not user.check_password(password):
                 user.set_password(password)
                 user.save(update_fields=["password"])
@@ -65,40 +71,50 @@ class Command(BaseCommand):
 
     def _locations(self):
         for number in range(1, 21):
-            Location.objects.get_or_create(
+            location, created = Location.objects.get_or_create(
                 type=LocationType.TABLE, reference=f"T{number}"
             )
+            if created:
+                register_demo_record(location)
         for number in range(201, 206):
-            Location.objects.get_or_create(
+            location, created = Location.objects.get_or_create(
                 type=LocationType.ROOM, reference=str(number)
             )
+            if created:
+                register_demo_record(location)
 
     def _menu(self, actor):
         names = ["Soupe du jour", "Poulet rôti", "Tarte aux pommes"]
         prices = [Decimal("6.50"), Decimal("18.00"), Decimal("7.00")]
         categories = {}
         for name, position in [("Entrées", 1), ("Plats", 2), ("Desserts", 3)]:
-            categories[name], _ = Category.objects.get_or_create(
+            categories[name], created = Category.objects.get_or_create(
                 name=name,
                 defaults={"position": position, "created_by": actor},
             )
+            if created:
+                register_demo_record(categories[name])
         dishes = []
         for name, price, category_name in zip(names, prices, categories, strict=True):
-            dish, _ = Dish.objects.get_or_create(
+            dish, created = Dish.objects.get_or_create(
                 name=name,
                 category=categories[category_name],
                 defaults={"price": price, "created_by": actor},
             )
+            if created:
+                register_demo_record(dish)
             dishes.append(dish)
         return dishes
 
     def _inventory(self, actor, dishes):
-        supplier, _ = Supplier.objects.get_or_create(
+        supplier, created = Supplier.objects.get_or_create(
             name="Fournisseur Démo", defaults={"created_by": actor}
         )
+        if created:
+            register_demo_record(supplier)
         ingredients = []
         for name, cost in [("Légumes", "2.50"), ("Poulet", "8.00"), ("Farine", "1.20")]:
-            ingredient, _ = Ingredient.objects.get_or_create(
+            ingredient, created = Ingredient.objects.get_or_create(
                 name=name,
                 defaults={
                     "unit_of_measure": "KG",
@@ -108,8 +124,10 @@ class Command(BaseCommand):
                     "created_by": actor,
                 },
             )
+            if created:
+                register_demo_record(ingredient)
             if not ingredient.stock_lots.exists():
-                receive_lot(
+                lot = receive_lot(
                     ingredient=ingredient,
                     quantity=Decimal("100.000"),
                     cost_per_unit=Decimal(cost),
@@ -118,13 +136,16 @@ class Command(BaseCommand):
                     supplier=supplier,
                     actor=actor,
                 )
+                register_demo_record(lot)
+                for movement in lot.movements.all():
+                    register_demo_record(movement)
             ingredients.append(ingredient)
 
         for dish, ingredient in zip(dishes, ingredients, strict=True):
             if not RecipeVersion.objects.filter(
                 menu_item_id=str(dish.pk), is_active=True
             ).exists():
-                publish_recipe_version(
+                recipe = publish_recipe_version(
                     menu_item_id=str(dish.pk),
                     name=f"Recette {dish.name}",
                     items=[
@@ -135,6 +156,9 @@ class Command(BaseCommand):
                     ],
                     actor=actor,
                 )
+                register_demo_record(recipe)
+                for recipe_item in recipe.items.all():
+                    register_demo_record(recipe_item)
         return ingredients
 
     def _production(self, actor):
@@ -150,7 +174,9 @@ class Command(BaseCommand):
             },
         )
         if created:
-            declare_waste(
+            register_demo_record(batch)
+        if created:
+            declaration = declare_waste(
                 batch_id=batch.pk,
                 remaining_quantity=Decimal("1.00"),
                 reusable_quantity=Decimal("0.50"),
@@ -158,6 +184,7 @@ class Command(BaseCommand):
                 reason="Démo fin de service",
                 actor=actor,
             )
+            register_demo_record(declaration)
 
     def _history(self, waiter, manager, dish):
         today = timezone.localdate()
@@ -176,6 +203,7 @@ class Command(BaseCommand):
                 subtotal=dish.price,
                 total=dish.price,
             )
+            register_demo_record(order)
             OrderItem.objects.create(
                 order=order,
                 menu_item_id=str(dish.pk),
@@ -184,14 +212,16 @@ class Command(BaseCommand):
                 unit_price=dish.price,
                 total_price=dish.price,
             )
+            register_demo_record(order.items.get())
             historical_time = timezone.make_aware(
                 datetime.combine(sold_on, time(hour=12))
             )
             Order.objects.filter(pk=order.pk).update(created_at=historical_time)
-            OrderStatusHistory.objects.create(
+            status_history = OrderStatusHistory.objects.create(
                 order=order,
                 from_status="",
                 to_status=OrderStatus.COMPLETED,
                 changed_by=manager,
                 note="Commande historique de démonstration",
             )
+            register_demo_record(status_history)

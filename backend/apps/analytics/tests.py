@@ -11,6 +11,14 @@ from rest_framework.test import APIClient
 
 from apps.accounts.factories import UserFactory
 from apps.audit.models import AuditEvent
+from apps.inventory.models import (
+    Ingredient,
+    RecipeConsumption,
+    RecipeItem,
+    RecipeVersion,
+    StockLot,
+    StockMovement,
+)
 from apps.orders.models import Order, OrderItem
 from apps.payments.models import Payment, Refund
 from common.constants import Role
@@ -89,6 +97,82 @@ def test_overview_rejects_reversed_and_overlong_date_ranges():
         overview(day, day - timedelta(days=1))
     with pytest.raises(ValidationError):
         overview(day - timedelta(days=366), day)
+
+
+def test_overview_includes_dish_hour_basket_and_cost_indicators():
+    today = timezone.localdate()
+    order = Order.objects.create(
+        status="COMPLETED",
+        subtotal=Decimal("10.00"),
+        total=Decimal("10.00"),
+        currency="XOF",
+    )
+    Order.objects.filter(pk=order.pk).update(created_at=timezone.now())
+    order.refresh_from_db()
+    item = OrderItem.objects.create(
+        order=order,
+        menu_item_id="dish-1",
+        menu_item_name="Soupe",
+        quantity=2,
+        unit_price=Decimal("5.00"),
+        total_price=Decimal("10.00"),
+    )
+    ingredient = Ingredient.objects.create(name="Légumes")
+    recipe = RecipeVersion.objects.create(
+        name="Soupe",
+        menu_item_id=item.menu_item_id,
+        version_number=1,
+    )
+    recipe_item = RecipeItem.objects.create(
+        recipe_version=recipe,
+        ingredient=ingredient,
+        quantity_required=Decimal("1.000"),
+    )
+    lot = StockLot.objects.create(
+        ingredient=ingredient,
+        quantity_received=Decimal("10.000"),
+        quantity_remaining=Decimal("8.000"),
+        date_received=today,
+        date_expiration=today + timedelta(days=10),
+        cost_per_unit=Decimal("1.00"),
+    )
+    StockMovement.objects.create(
+        lot=lot,
+        movement_type="OUT",
+        quantity=Decimal("2.000"),
+        unit_cost=Decimal("1.00"),
+        reference_order=order,
+    )
+    RecipeConsumption.objects.create(
+        recipe_version=recipe,
+        recipe_item=recipe_item,
+        order=order,
+        quantity_consumed_per_item=Decimal("2.000"),
+    )
+
+    result = overview(today, today)
+
+    assert result["popular_dishes"] == [
+        {"menu_item_id": "dish-1", "menu_item_name": "Soupe", "quantity": 2}
+    ]
+    assert result["average_baskets"] == [
+        {
+            "currency": "XOF",
+            "completed_orders": 1,
+            "average_subtotal": "10.00",
+        }
+    ]
+    assert result["margins_and_costs"] == [
+        {
+            "currency": "XOF",
+            "cost_currency": "XOF",
+            "sales": "10.00",
+            "estimated_cost": "2.00",
+            "cost_coverage": "1.0000",
+            "gross_margin": "8.00",
+        }
+    ]
+    assert len(result["orders_by_hour"]) == 24
 
 
 @override_settings(ROOT_URLCONF="apps.analytics.urls")

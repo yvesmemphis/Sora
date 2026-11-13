@@ -8,12 +8,53 @@ from django.utils import timezone
 from apps.audit import services as audit
 from apps.orders.models import Order
 from apps.orders.services import transition_order, waiter_can_access_order
-from common.constants import MANAGERS, OrderStatus, Role
+from common.constants import MANAGERS, OrderStatus, Role, normalize_payment_method
 from common.exceptions import DomainError
 
 from .models import Payment, Refund, reject_card_like
 
 ZERO = Decimal("0.00")
+
+
+def payment_totals_for_date(target_date):
+    totals = {}
+    payment_rows = (
+        Payment.objects.filter(
+            created_at__date=target_date,
+            status__in=["CONFIRMED", "REFUNDED"],
+        )
+        .values("payment_method", "currency")
+        .annotate(total=Sum("amount"))
+    )
+    for row in payment_rows:
+        key = (row["payment_method"], row["currency"])
+        totals[key] = {
+            "gross_collected": row["total"] or ZERO,
+            "refunded": ZERO,
+        }
+
+    refund_rows = (
+        Refund.objects.filter(status="COMPLETED", processed_at__date=target_date)
+        .values("payment__payment_method", "payment__currency")
+        .annotate(total=Sum("amount"))
+    )
+    for row in refund_rows:
+        key = (row["payment__payment_method"], row["payment__currency"])
+        values = totals.setdefault(
+            key, {"gross_collected": ZERO, "refunded": ZERO}
+        )
+        values["refunded"] = row["total"] or ZERO
+
+    return [
+        {
+            "payment_method": method,
+            "currency": currency,
+            "gross_collected": values["gross_collected"],
+            "refunded": values["refunded"],
+            "net_collected": values["gross_collected"] - values["refunded"],
+        }
+        for (method, currency), values in sorted(totals.items())
+    ]
 
 
 def _require_actor(user, roles):
@@ -78,10 +119,18 @@ def settle_if_paid(order, *, actor):
 def register_payment(*, order, amount, payment_method, user, reference=None):
     amount = _amount(amount)
     _require_actor(user, MANAGERS | {Role.WAITER})
-    payment_method = str(payment_method).strip()
+    payment_method = normalize_payment_method(str(payment_method).strip())
     allowed_methods = {choice[0] for choice in Payment.METHOD_CHOICES}
     if payment_method not in allowed_methods:
         raise DomainError("invalid_payment_method", "Mode de paiement invalide.", 400)
+    from apps.core.models import RestaurantSettings
+
+    if payment_method not in RestaurantSettings.load().accepted_payment_methods:
+        raise DomainError(
+            "payment_method_unavailable",
+            "Ce mode de paiement n'est pas accepté.",
+            400,
+        )
     try:
         reject_card_like(reference)
     except DjangoValidationError as exc:

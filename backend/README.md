@@ -175,9 +175,9 @@ Toutes les routes sont préfixées par `/api/v1/` :
 
 | Méthode | Route | Accès | Fonction |
 | --- | --- | --- | --- |
-| `POST` | `/auth/login/` | Public, limité en débit | Obtenir les jetons d'accès et de rafraîchissement |
-| `POST` | `/auth/refresh/` | Public, limité en débit | Rafraîchir un jeton |
-| `POST` | `/auth/logout/` | Authentifié | Révoquer un jeton de rafraîchissement |
+| `POST` | `/auth/login/` | Public, limité en débit | Obtenir l'accès et le cookie HttpOnly de rafraîchissement |
+| `POST` | `/auth/refresh/` | Public, limité en débit | Rafraîchir l'accès avec le cookie HttpOnly |
+| `POST` | `/auth/logout/` | Authentifié | Révoquer puis supprimer le cookie de rafraîchissement |
 | `GET` | `/auth/me/` | Authentifié | Lire le profil courant |
 | `POST` | `/auth/password-reset/` | Public, limité en débit | Demander un lien de réinitialisation ; réponse identique si le compte n'existe pas |
 | `POST` | `/auth/password-reset/confirm/` | Public, limité en débit | Définir un nouveau mot de passe avec `uid` et `token` |
@@ -186,17 +186,20 @@ Toutes les routes sont préfixées par `/api/v1/` :
 | `GET` / `PATCH` | `/staff/{id}/` | Administrateur | Lire ou modifier un employé |
 | `POST` | `/staff/{id}/resend-invitation/` | Administrateur | Renvoyer l'invitation si le mot de passe n'est pas encore défini |
 | `GET` / `PATCH` | `/settings/` | Tous / Administrateur | Lire ou modifier les réglages |
-| `GET` | `/audit/` | Administrateur | Lire les événements; filtrer avec `date_from`, `date_to`, `actor`, `module`, `action` ou `result` |
+| `GET` | `/audit/`, `/audit/export/` | Administrateur | Lire le journal ou l'exporter en CSV avec les filtres `date_from`, `date_to`, `actor`, `module`, `action` ou `result` |
 | `GET` | `/public/menu/` | Public | Lire les plats publiés et leur disponibilité |
+| `GET` | `/public/menu/qr/` | Responsable | Télécharger un QR du menu avec mode et emplacement optionnels |
 | `GET` / `POST` | `/categories/`, `/dishes/`, `/locations/` | Selon rôle | Gérer le menu et les emplacements |
 | `POST` | `/public/orders/` | Public | Créer une commande au prix serveur |
 | `GET` | `/public/track/{token}/` | Public avec jeton signé | Suivre une commande sans compte |
 | `POST` | `/public/track/{token}/cancel/` | Public avec jeton signé | Annuler une commande encore reçue dans le délai autorisé |
+| `GET` | `/public/track/{token}/qr/` | Public avec jeton signé | Télécharger le QR de suivi de commande |
 | `GET` / `POST` | `/orders/` | Personnel autorisé | Filtrer, lister et créer les commandes |
 | `POST` / `PATCH` | `/orders/{id}/transition/`, `/orders/{id}/location/` | Personnel autorisé | Faire évoluer une commande ou modifier son emplacement avant la préparation |
 | `GET` / `POST` | `/kitchen/queue/`, `/kitchen/tickets/` | Cuisine | Lire la file et créer un ticket WebSocket |
 | `GET` / `POST` | `/orders/{id}/payments/` | Salle / responsables | Consulter et enregistrer un paiement |
 | `GET` | `/payments/?date=AAAA-MM-JJ` | Administrateur / gestionnaire | Lister les paiements du jour et agréger les encaissements/remboursements par moyen et devise |
+| `GET` / `POST` | `/cash-register/closures/` | Administrateur / gestionnaire | Consulter ou enregistrer une clôture journalière avec totaux attendus et comptage espèces |
 | `POST` | `/payments/{id}/refunds/`, `/refunds/{id}/process/` | Responsables | Demander et traiter un remboursement |
 | `GET` / `POST` | `/suppliers/`, `/ingredients/`, `/stock-lots/` | Selon rôle | Gérer fournisseurs, ingrédients et lots |
 | `GET` | `/stock-movements/`, `/inventory-alerts/` | Responsables | Lire mouvements et alertes |
@@ -206,22 +209,39 @@ Toutes les routes sont préfixées par `/api/v1/` :
 | `GET` | `/schema/`, `/docs/` | Administrateur | Consulter le schéma OpenAPI et Swagger |
 
 Les accès JWT durent 10 minutes ; les jetons de rafraîchissement durent 7 jours
-et sont renouvelés avec liste de révocation. Les rôles métier sont `ADMIN`,
+et sont renouvelés avec liste de révocation. Le jeton de rafraîchissement est
+uniquement renvoyé dans un cookie `HttpOnly`, `SameSite=Lax` et sécurisé en
+production; le jeton d'accès court reste dans le corps de la réponse. Les rôles métier sont `ADMIN`,
 `MANAGER`, `WAITER` et `KITCHEN`. L'API du personnel est actuellement réservée à
 `ADMIN`. Le délai d'annulation client est configurable avec
-`withdrawal_delay_minutes` dans les réglages (5 minutes par défaut) ; seules les
-commandes publiques encore au statut `RECEIVED` peuvent être annulées ainsi.
+`withdrawal_delay_minutes` (5 minutes par défaut); il est renvoyé par le menu,
+la création et le suivi, puis figé sur chaque commande. Seules les commandes
+publiques `RECEIVED` peuvent être annulées jusqu'à `withdrawal_deadline`.
+Lorsque `auto_confirm_orders` est activé, le serveur confirme après ce délai via
+`python manage.py process_public_order_timeouts`; planifier cette commande avec
+`scripts\register_order_timeout_task.ps1` ou le planificateur du serveur.
+`opening_hours` est un objet indexé par jour anglais en minuscules (`monday` à
+`sunday`); chaque jour contient une plage `{"open":"09:00","close":"17:00"}`,
+une liste de plages pour les services fractionnés, ou `{"closed":true}`.
 Les nouvelles commandes et leurs paiements utilisent le XOF par défaut ; la
 migration de devise conserve en EUR les commandes déjà enregistrées sans devise.
 Les chiffres d'affaires de l'aperçu restent regroupés par devise.
 La liste des commandes conserve son format historique par défaut ; `status`,
 `date` et `created_after` filtrent les résultats, et `page` ou `page_size`
-active une réponse paginée. Le menu public indique aussi `is_available` et
-`preparation_time` pour les plats publiés, y compris ceux qui sont momentanément
-indisponibles. Une commande peut contenir `payment_method_expected` avec un
-moyen déjà reconnu par l'API; l'emplacement est modifiable uniquement avant
-le début de la préparation. Les rapports de paiements séparent toujours les
-devises et soustraient les remboursements traités à la date demandée.
+active une réponse paginée. Le menu indique aussi `availability_status`
+(`AVAILABLE`, `SOLD_OUT` ou `TEMPORARILY_UNAVAILABLE`) et `preparation_time`.
+Les codes canoniques de paiement sont `card`, `cash`, `bank_transfer` et
+`other`; les anciens codes français sont migrés et acceptés comme alias d'entrée.
+Les réglages exposent également les horaires, les moyens acceptés et la devise
+par défaut. Les clôtures enregistrent leurs totaux attendus, espèces attendues
+et comptées, à raison d'une clôture par responsable et par jour. Les indicateurs
+incluent les plats populaires, les commandes par heure, les paniers moyens et
+les coûts/marges estimés; une marge n'est fournie que si toutes les commandes
+ont des consommations de recette enregistrées et que les devises concordent.
+Les événements de commande sont envoyés individuellement par email aux
+responsables et à la cuisine; un fournisseur email doit être configuré en
+production. Les rapports de paiements séparent toujours les devises et
+soustraient les remboursements traités à la date demandée.
 
 ## Points restant à faire
 
@@ -231,6 +251,12 @@ devises et soustraient les remboursements traités à la date demandée.
 - Lancer `python manage.py seed_demo` avec `DEMO_PASSWORD` pour préparer les
   comptes, le catalogue, les stocks et les historiques de démonstration. Hors
   `DEBUG`, la commande exige explicitement `--force-demo`.
+- Planifier `python manage.py generate_forecasts` chaque jour avec
+  `scripts\register_forecast_task.ps1` (ou cron) pour générer les prévisions du
+  lendemain.
+- `python manage.py purge_demo --confirm` supprime les objets suivis lors des
+  exécutions ultérieures de `seed_demo`; les objets référencés hors démo sont
+  conservés et les événements d'audit restent append-only.
 - Générer et valider le schéma avec
   `python manage.py spectacular --file schema.yml --validate --fail-on-warn`.
 - La CI GitHub exécute Ruff, les migrations, les tests, l'audit des dépendances
@@ -239,5 +265,6 @@ devises et soustraient les remboursements traités à la date demandée.
   `BACKUP_DIR`; il ne supprime pas automatiquement les anciennes sauvegardes.
 - Lire [la procédure de déploiement, sauvegarde et restauration](docs/operations.md)
   avant toute mise en production.
-- En environnement réel, remplacer le backend email console par un fournisseur
-  configuré et surveillé.
+- En environnement réel, configurer et surveiller le fournisseur email avec
+  `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
+  `EMAIL_USE_TLS` et `DEFAULT_FROM_EMAIL`.

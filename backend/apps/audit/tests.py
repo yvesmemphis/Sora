@@ -80,3 +80,30 @@ def test_audit_date_range_must_be_ordered():
     )
 
     assert response.status_code == 400
+
+
+def test_analytics_module_filter_and_csv_export_use_server_query_filters():
+    actor = UserFactory(role=Role.ADMIN)
+    forecast_event = AuditEvent.objects.create(
+        actor=actor,
+        action="analytics.forecast.reject",
+        resource_type="apps.analytics.forecast",
+    )
+    AuditEvent.objects.create(
+        actor=actor,
+        action="payment.registered",
+        resource_type="apps.payments.payment",
+    )
+    client = APIClient()
+    client.force_authenticate(actor)
+
+    response = client.get(reverse("audit-list"), {"module": "analytics"})
+    assert response.status_code == 200
+    assert response.data["count"] == 1
+    assert response.data["results"][0]["id"] == str(forecast_event.pk)
+
+    exported = client.get(reverse("audit-export"), {"module": "analytics"})
+    content = b"".join(exported.streaming_content).decode("utf-8")
+    assert exported.status_code == 200
+    assert "analytics.forecast.reject" in content
+    assert "payment.registered" not in content

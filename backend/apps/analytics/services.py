@@ -4,10 +4,14 @@ from decimal import Decimal
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.db.models import Count, Max, Q, Sum
+from django.db.models import Avg, Count, Max, Q, Sum
+from django.db.models.functions import ExtractHour
 from django.utils import timezone
 
+from apps.audit.models import AuditEvent
 from apps.audit.services import log as audit_log
+from apps.core.models import RestaurantSettings
+from apps.inventory.models import RecipeConsumption, StockMovement
 from apps.orders.models import Order, OrderItem
 from apps.payments.models import Payment, Refund
 from common.constants import MANAGERS
@@ -74,12 +78,127 @@ def overview(start_date, end_date):
     for payment_status in ("PENDING", "CONFIRMED", "FAILED", "REFUNDED"):
         payment_counts.setdefault(payment_status, 0)
 
+    completed_orders = Order.objects.filter(
+        status__in=COMPLETED_ORDER_STATUSES,
+        created_at__date__range=(start_date, end_date),
+    )
+    popular_dishes = list(
+        OrderItem.objects.filter(order__in=completed_orders)
+        .values("menu_item_id", "menu_item_name")
+        .annotate(quantity=Sum("quantity"))
+        .order_by("-quantity", "menu_item_name")[:10]
+    )
+    for dish in popular_dishes:
+        dish["quantity"] = int(dish["quantity"])
+
+    orders_by_hour = {
+        row["hour"]: row["count"]
+        for row in orders.annotate(
+            hour=ExtractHour("created_at", tzinfo=timezone.get_current_timezone())
+        )
+        .values("hour")
+        .annotate(count=Count("id"))
+    }
+    orders_by_hour = [
+        {"hour": f"{hour:02d}:00", "count": orders_by_hour.get(hour, 0)}
+        for hour in range(24)
+    ]
+
+    average_baskets = [
+        {
+            "currency": row["currency"],
+            "completed_orders": row["count"],
+            "average_subtotal": format(row["average"] or Decimal("0.00"), ".2f"),
+        }
+        for row in completed_orders.values("currency")
+        .annotate(count=Count("id"), average=Avg("subtotal"))
+        .order_by("currency")
+    ]
+
+    sales_by_currency = {
+        row["currency"]: {
+            "sales": row["sales"] or Decimal("0.00"),
+            "order_count": row["order_count"],
+        }
+        for row in completed_orders.values("currency").annotate(
+            sales=Sum("subtotal"), order_count=Count("id")
+        )
+    }
+    completed_order_ids = list(completed_orders.values_list("pk", flat=True))
+    expected_menu_items = defaultdict(set)
+    for order_id, menu_item_id in OrderItem.objects.filter(
+        order_id__in=completed_order_ids
+    ).values_list("order_id", "menu_item_id"):
+        expected_menu_items[order_id].add(menu_item_id)
+    consumed_menu_items = defaultdict(set)
+    for order_id, menu_item_id in RecipeConsumption.objects.filter(
+        order_id__in=completed_order_ids
+    ).values_list("order_id", "recipe_version__menu_item_id").distinct():
+        consumed_menu_items[order_id].add(menu_item_id)
+    missing_recipe_orders = set(
+        AuditEvent.objects.filter(
+            action="inventory.recipe_missing",
+            resource_type="apps.orders.order",
+            resource_id__in=[str(order_id) for order_id in completed_order_ids],
+        ).values_list("resource_id", flat=True)
+    )
+    covered_orders_by_currency = defaultdict(int)
+    for order_id, currency in completed_orders.values_list("pk", "currency"):
+        order_key = str(order_id)
+        if (
+            expected_menu_items[order_id]
+            and expected_menu_items[order_id] <= consumed_menu_items[order_id]
+            and order_key not in missing_recipe_orders
+        ):
+            covered_orders_by_currency[currency] += 1
+
+    costs_by_currency = {
+        row["reference_order__currency"]: {
+            "cost": row["cost"] or Decimal("0.00"),
+        }
+        for row in StockMovement.objects.filter(
+            reference_order__in=completed_orders,
+            movement_type="OUT",
+        )
+        .values("reference_order__currency")
+        .annotate(cost=Sum("total_cost"))
+    }
+    cost_currency = RestaurantSettings.load().currency
+    margins_and_costs = []
+    for currency, sales in sorted(sales_by_currency.items()):
+        costs = costs_by_currency.get(
+            currency, {"cost": Decimal("0.00")}
+        )
+        coverage = (
+            Decimal(covered_orders_by_currency[currency]) / sales["order_count"]
+            if sales["order_count"]
+            else Decimal(0)
+        )
+        margins_and_costs.append(
+            {
+                "currency": currency,
+                "cost_currency": cost_currency,
+                "sales": format(sales["sales"], ".2f"),
+                "estimated_cost": format(costs["cost"], ".2f"),
+                "cost_coverage": format(coverage, ".4f"),
+                "gross_margin": (
+                    format(sales["sales"] - costs["cost"], ".2f")
+                    if currency == cost_currency and coverage == 1
+                    else None
+                ),
+            }
+        )
+
     return {
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "orders": order_counts,
         "payments": payment_counts,
         "revenue": revenue,
+        "popular_dishes": popular_dishes,
+        "orders_by_hour": orders_by_hour,
+        "average_baskets": average_baskets,
+        "margins_and_costs": margins_and_costs,
     }
 
 

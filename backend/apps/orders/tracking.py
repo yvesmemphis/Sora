@@ -19,7 +19,16 @@ def order_from_tracking_token(token):
         order_id, signature = token.split(".")
         order = (
             Order.objects.prefetch_related("items")
-            .only("id", "number", "status", "created_at", "total", "currency")
+            .only(
+                "id",
+                "number",
+                "status",
+                "source",
+                "created_at",
+                "total",
+                "currency",
+                "withdrawal_delay_minutes",
+            )
             .get(pk=order_id)
         )
     except (TypeError, ValueError, Order.DoesNotExist):

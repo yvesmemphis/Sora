@@ -3,7 +3,12 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .public_views import PublicOrderCreateView, PublicTrackCancelView, PublicTrackView
+from .public_views import (
+    PublicOrderCreateView,
+    PublicTrackCancelView,
+    PublicTrackQrView,
+    PublicTrackView,
+)
 from .views import OrderViewSet
 
 app_name = "orders"
@@ -17,6 +22,11 @@ urlpatterns = [
         "public/track/<str:token>/cancel/",
         PublicTrackCancelView.as_view(),
         name="public-track-cancel",
+    ),
+    path(
+        "public/track/<str:token>/qr/",
+        PublicTrackQrView.as_view(),
+        name="public-track-qr",
     ),
     path("public/track/<str:token>/", PublicTrackView.as_view(), name="public-track"),
     path("", include(router.urls)),
